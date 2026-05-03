@@ -16,25 +16,14 @@ export default function LoginPage() {
       data: { user },
     } = await supabase.auth.getUser();
 
+    setGlobalLoading(false);
+
     if (!user) {
-      setGlobalLoading(false);
       alert("Login failed. Please try again.");
       return;
     }
 
-    const { data: membership } = await supabase
-      .from("workspace_members")
-      .select("id, workspace_id")
-      .eq("user_id", user.id)
-      .maybeSingle();
-
-    setGlobalLoading(false);
-
-    if (membership) {
-      window.location.href = "/dashboard";
-    } else {
-      window.location.href = "/onboarding";
-    }
+    window.location.href = "/dashboard";
   };
 
   const handleSignIn = async () => {
@@ -79,16 +68,16 @@ export default function LoginPage() {
       return;
     }
 
-    window.location.href = "/onboarding";
+    window.location.href = "/dashboard";
   };
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-slate-100 px-4">
+    <main className="flex min-h-screen items-center justify-center bg-slate-100 px-4">
       <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow">
         <h1 className="text-2xl font-bold text-slate-900">Login</h1>
 
         <p className="mt-2 text-sm text-slate-500">
-          Access your Workspora workspace
+          Access your Workspora portal
         </p>
 
         <div className="mt-6 space-y-4">
