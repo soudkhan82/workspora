@@ -150,7 +150,19 @@ export default function WorkflowsPage() {
     if (wf?.length) setSelectedWorkflow(wf[0].id);
     setLoading(false);
   }
+  async function loadContactsOnly() {
+    const { data, error } = await supabase
+      .from("contacts")
+      .select("id, full_name, email, phone, designation, company, status")
+      .order("full_name", { ascending: true });
 
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    setContacts(data ?? []);
+  }
   async function loadBoard(workflowId: number) {
     const [{ data: stageData }, { data: taskData }] = await Promise.all([
       supabase
@@ -187,6 +199,7 @@ export default function WorkflowsPage() {
           .from("contacts")
           .select("id, full_name, email, phone, designation, company, status")
           .order("full_name", { ascending: true }),
+
         supabase.from("workflow_priorities").select("*").order("id"),
         supabase.from("workflow_task_statuses").select("*").order("id"),
         supabase.from("projects").select("id, name").order("name"),
