@@ -20,43 +20,28 @@ body {
 }
 
 /* Workspora typography standard - KPI style */
-h1,
-h2,
-h3,
-h4,
-h5,
-h6 {
+:where(h1, h2, h3, h4, h5, h6) {
   color: #020617;
   letter-spacing: -0.02em;
 }
 
-h1 {
+:where(h1) {
   font-weight: 700;
 }
 
-h2,
-h3 {
+:where(h2, h3) {
   font-weight: 650;
 }
 
-h4,
-h5,
-h6 {
+:where(h4, h5, h6) {
   font-weight: 600;
 }
 
-button,
-table th {
+:where(button, table th) {
   font-weight: 700;
 }
 
-table td,
-input,
-select,
-textarea,
-p,
-span,
-label {
+:where(table td, input, select, textarea, p, span, label) {
   font-weight: 400;
 }
 
@@ -86,4 +71,31 @@ label {
   line-height: 2.15rem;
   font-weight: 700;
   color: #020617;
+}
+
+/* Dark utility helpers */
+.workspora-dark-title {
+  color: #ffffff !important;
+}
+
+.workspora-dark-muted {
+  color: #e2e8f0 !important;
+}
+
+/* Login page dark carousel overrides */
+.workspora-login-hero-title {
+  color: #ffffff !important;
+}
+
+.workspora-login-hero-description {
+  color: #e2e8f0 !important;
+}
+
+.workspora-login-dark-card h1,
+.workspora-login-dark-card h2,
+.workspora-login-dark-card h3,
+.workspora-login-dark-card h4,
+.workspora-login-dark-card h5,
+.workspora-login-dark-card h6 {
+  color: inherit;
 }
