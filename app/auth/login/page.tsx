@@ -194,7 +194,11 @@ export default function LoginPage() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: `${origin}/auth/callback`,
+          redirectTo: `${origin}/auth/callback?next=/dashboard`,
+          queryParams: {
+            access_type: "offline",
+            prompt: "consent",
+          },
         },
       });
 
@@ -205,13 +209,12 @@ export default function LoginPage() {
       }
     } catch {
       setErrorMessage(
-        "Unable to start Google login. Please check Supabase OAuth configuration.",
+        "Unable to start Google login. Please check Supabase Google OAuth configuration.",
       );
       setSubmitting(false);
       setGlobalLoading(false);
     }
   }
-
   return (
     <main className="min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top_left,#dcfce7_0,#f8fafc_32%,#ffffff_74%)] text-slate-950">
       <section className="flex min-h-screen w-full items-center justify-center px-4 py-5 sm:px-6 lg:px-8">
