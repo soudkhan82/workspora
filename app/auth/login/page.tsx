@@ -11,6 +11,8 @@ type Slide = {
   image: string;
 };
 
+type AuthMode = "login" | "signup";
+
 const POST_LOGIN_ROUTE = "/dashboard";
 // If your actual dashboard route is app/page.tsx, change this to:
 // const POST_LOGIN_ROUTE = "/";
@@ -63,12 +65,15 @@ export default function LoginPage() {
   const routingRef = useRef(false);
 
   const [activeSlide, setActiveSlide] = useState(0);
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
   const [checkingSession, setCheckingSession] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
 
   useEffect(() => {
     mountedRef.current = true;
@@ -137,38 +142,80 @@ export default function LoginPage() {
     return () => window.clearInterval(timer);
   }, []);
 
-  async function handleLogin(e: React.FormEvent<HTMLFormElement>) {
+  function resetMessages() {
+    setErrorMessage("");
+    setSuccessMessage("");
+  }
+
+  async function handleEmailAuth(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
-    if (submitting) return;
+    if (submitting || checkingSession) return;
 
     const cleanEmail = email.trim();
 
     if (!cleanEmail || !password) {
       setErrorMessage("Please enter email and password.");
+      setSuccessMessage("");
+      return;
+    }
+
+    if (password.length < 6) {
+      setErrorMessage("Password must be at least 6 characters.");
+      setSuccessMessage("");
       return;
     }
 
     setSubmitting(true);
     setCheckingSession(false);
-    setErrorMessage("");
-    setGlobalLoading(true);
+    resetMessages();
+
+    if (authMode === "login") {
+      setGlobalLoading(true);
+    }
 
     try {
-      const { error } = await supabase.auth.signInWithPassword({
+      if (authMode === "login") {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: cleanEmail,
+          password,
+        });
+
+        if (error) {
+          setErrorMessage(error.message || "Invalid login credentials.");
+          return;
+        }
+
+        await routeUser();
+        return;
+      }
+
+      const { data, error } = await supabase.auth.signUp({
         email: cleanEmail,
         password,
       });
 
       if (error) {
-        setErrorMessage(error.message || "Invalid login credentials.");
+        setErrorMessage(error.message || "Unable to create account.");
         return;
       }
 
+      if (!data.session) {
+        setSuccessMessage(
+          "Account created. Please confirm your email, then sign in.",
+        );
+        setAuthMode("login");
+        setPassword("");
+        return;
+      }
+
+      setGlobalLoading(true);
       await routeUser();
     } catch {
       setErrorMessage(
-        "Unable to sign in. Please check Supabase URL, anon key, and network connection.",
+        authMode === "login"
+          ? "Unable to sign in. Please check Supabase URL, anon key, and network connection."
+          : "Unable to create account. Please check Supabase email auth settings.",
       );
     } finally {
       if (mountedRef.current) {
@@ -180,11 +227,11 @@ export default function LoginPage() {
   }
 
   async function handleGoogleLogin() {
-    if (submitting) return;
+    if (submitting || checkingSession) return;
 
     setSubmitting(true);
     setCheckingSession(false);
-    setErrorMessage("");
+    resetMessages();
     setGlobalLoading(true);
 
     try {
@@ -215,6 +262,7 @@ export default function LoginPage() {
       setGlobalLoading(false);
     }
   }
+
   return (
     <main className="min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top_left,#dcfce7_0,#f8fafc_32%,#ffffff_74%)] text-slate-950">
       <section className="flex min-h-screen w-full items-center justify-center px-4 py-5 sm:px-6 lg:px-8">
@@ -302,19 +350,56 @@ export default function LoginPage() {
                 </div>
               </div>
 
-              <div className="mb-6">
+              <div className="mb-5">
                 <div className="mb-4 inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
                   Workspace Control Center
                 </div>
 
                 <h1 className="text-3xl font-semibold tracking-tight text-slate-950">
-                  Sign in to Workspora
+                  {authMode === "login"
+                    ? "Sign in to Workspora"
+                    : "Create test account"}
                 </h1>
 
                 <p className="mt-3 text-sm leading-6 text-slate-500">
-                  Access your workspace dashboard, modules, members, clients,
-                  projects and executive reports.
+                  {authMode === "login"
+                    ? "Access your workspace dashboard, modules, members, clients, projects and executive reports."
+                    : "Create an email-password user for testing Workspora modules."}
                 </p>
+              </div>
+
+              <div className="mb-5 grid grid-cols-2 rounded-2xl bg-slate-100 p-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode("login");
+                    resetMessages();
+                  }}
+                  disabled={submitting || checkingSession}
+                  className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${
+                    authMode === "login"
+                      ? "bg-white text-slate-950 shadow-sm"
+                      : "text-slate-500 hover:text-slate-900"
+                  }`}
+                >
+                  Sign in
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode("signup");
+                    resetMessages();
+                  }}
+                  disabled={submitting || checkingSession}
+                  className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${
+                    authMode === "signup"
+                      ? "bg-white text-slate-950 shadow-sm"
+                      : "text-slate-500 hover:text-slate-900"
+                  }`}
+                >
+                  Sign up
+                </button>
               </div>
 
               {errorMessage ? (
@@ -323,13 +408,13 @@ export default function LoginPage() {
                 </div>
               ) : null}
 
-              {checkingSession ? (
-                <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-                  Checking existing session...
+              {successMessage ? (
+                <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm leading-6 text-emerald-700">
+                  {successMessage}
                 </div>
               ) : null}
 
-              <form onSubmit={handleLogin} className="space-y-4">
+              <form onSubmit={handleEmailAuth} className="space-y-4">
                 <div>
                   <label className="mb-1.5 block text-sm font-medium text-slate-700">
                     Email
@@ -340,7 +425,8 @@ export default function LoginPage() {
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="you@example.com"
                     autoComplete="email"
-                    className="h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100"
+                    disabled={submitting || checkingSession}
+                    className="h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-50"
                   />
                 </div>
 
@@ -352,18 +438,31 @@ export default function LoginPage() {
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Enter password"
-                    autoComplete="current-password"
-                    className="h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100"
+                    placeholder={
+                      authMode === "login"
+                        ? "Enter password"
+                        : "Minimum 6 characters"
+                    }
+                    autoComplete={
+                      authMode === "login" ? "current-password" : "new-password"
+                    }
+                    disabled={submitting || checkingSession}
+                    className="h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-50"
                   />
                 </div>
 
                 <button
                   type="submit"
-                  disabled={submitting}
+                  disabled={submitting || checkingSession}
                   className="flex h-12 w-full items-center justify-center rounded-xl bg-slate-950 px-4 text-sm font-semibold text-white shadow-lg shadow-slate-300 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {submitting ? "Signing in..." : "Sign in"}
+                  {submitting
+                    ? authMode === "login"
+                      ? "Signing in..."
+                      : "Creating account..."
+                    : authMode === "login"
+                      ? "Sign in"
+                      : "Create account"}
                 </button>
               </form>
 
@@ -378,14 +477,42 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={handleGoogleLogin}
-                disabled={submitting}
+                disabled={submitting || checkingSession}
                 className="flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Continue with Google
               </button>
 
               <p className="mt-6 text-center text-xs leading-5 text-slate-400">
-                Protected workspace access for Workspora modules.
+                {authMode === "login" ? (
+                  <>
+                    Need a test user?{" "}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode("signup");
+                        resetMessages();
+                      }}
+                      className="font-semibold text-emerald-700 hover:text-emerald-800"
+                    >
+                      Create account
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    Already have an account?{" "}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode("login");
+                        resetMessages();
+                      }}
+                      className="font-semibold text-emerald-700 hover:text-emerald-800"
+                    >
+                      Sign in
+                    </button>
+                  </>
+                )}
               </p>
             </div>
           </div>

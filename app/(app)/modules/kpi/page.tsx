@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { createClientBrowser } from "@/app/lib/supabase/browser";
 
 type KPI = {
   id: string;
@@ -13,6 +14,8 @@ type KPI = {
   due_date: string | null;
   detail: string | null;
   created_at: string;
+  workspace_id?: string | null;
+  created_by?: string | null;
 };
 
 type KpiCategory = {
@@ -20,8 +23,10 @@ type KpiCategory = {
   name: string;
 };
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+type WorkspaceContext = {
+  userId: string;
+  workspaceId: string;
+};
 
 const FALLBACK_CATEGORIES = [
   "Sales",
@@ -56,11 +61,16 @@ const KPI_UNITS = [
 ];
 
 export default function KPIPage() {
+  const supabase = useMemo(() => createClientBrowser(), []);
+
   const [sortKey, setSortKey] = useState<keyof KPI>("created_at");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [kpis, setKpis] = useState<KPI[]>([]);
   const [categories, setCategories] = useState<KpiCategory[]>([]);
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
+
+  const [ctx, setCtx] = useState<WorkspaceContext | null>(null);
+  const [contextError, setContextError] = useState("");
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -74,11 +84,85 @@ export default function KPIPage() {
     category: "",
     target_value: "",
     current_value: "",
-    unit: "Rs",
+    unit: "PKR",
     status: "active",
     due_date: "",
     detail: "",
   });
+
+  useEffect(() => {
+    void loadInitialData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function getWorkspaceContext(): Promise<WorkspaceContext | null> {
+    if (ctx?.userId && ctx?.workspaceId) return ctx;
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError) {
+      setContextError(userError.message);
+      return null;
+    }
+
+    if (!user) {
+      setContextError("User not authenticated. Please login again.");
+      return null;
+    }
+
+    const { data: membership, error: membershipError } = await supabase
+      .from("workspace_members")
+      .select("workspace_id,status")
+      .eq("user_id", user.id)
+      .limit(1)
+      .maybeSingle();
+
+    if (membershipError) {
+      setContextError(membershipError.message);
+      return null;
+    }
+
+    if (!membership?.workspace_id) {
+      setContextError("No active workspace found for this user.");
+      return null;
+    }
+
+    if (
+      membership.status &&
+      String(membership.status).toLowerCase() !== "active"
+    ) {
+      setContextError("Your workspace membership is not active.");
+      return null;
+    }
+
+    const nextCtx = {
+      userId: user.id,
+      workspaceId: String(membership.workspace_id),
+    };
+
+    setCtx(nextCtx);
+    setContextError("");
+    return nextCtx;
+  }
+
+  async function loadInitialData() {
+    setLoading(true);
+
+    const currentCtx = await getWorkspaceContext();
+
+    if (!currentCtx) {
+      setKpis([]);
+      setCategories([]);
+      setLoading(false);
+      return;
+    }
+
+    await Promise.all([fetchKpis(currentCtx), loadCategories()]);
+    setLoading(false);
+  }
 
   async function loadCategories() {
     try {
@@ -87,9 +171,14 @@ export default function KPIPage() {
 
       if (data.success && Array.isArray(data.categories)) {
         setCategories(data.categories);
+      } else {
+        setCategories([]);
+        if (data.error)
+          console.error("Failed to load KPI categories:", data.error);
       }
     } catch (error) {
       console.error("Failed to load KPI categories:", error);
+      setCategories([]);
     }
   }
 
@@ -114,30 +203,24 @@ export default function KPIPage() {
     }
   }
 
-  async function fetchKpis() {
-    setLoading(true);
-    try {
-      const res = await fetch(
-        `${SUPABASE_URL}/rest/v1/kpis?select=*&order=created_at.desc`,
-        {
-          headers: {
-            apikey: SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-          },
-        },
-      );
+  async function fetchKpis(currentCtx?: WorkspaceContext) {
+    const scopedCtx = currentCtx ?? (await getWorkspaceContext());
+    if (!scopedCtx) return;
 
-      const data = await res.json();
-      setKpis(Array.isArray(data) ? data : []);
-    } finally {
-      setLoading(false);
+    const { data, error } = await supabase
+      .from("kpis")
+      .select("*")
+      .eq("workspace_id", scopedCtx.workspaceId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      alert(error.message);
+      setKpis([]);
+      return;
     }
-  }
 
-  useEffect(() => {
-    fetchKpis();
-    loadCategories();
-  }, []);
+    setKpis((data ?? []) as KPI[]);
+  }
 
   function updateForm(key: string, value: string) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -150,7 +233,7 @@ export default function KPIPage() {
       category: "",
       target_value: "",
       current_value: "",
-      unit: "Rs",
+      unit: "PKR",
       status: "active",
       due_date: "",
       detail: "",
@@ -159,6 +242,9 @@ export default function KPIPage() {
 
   async function saveKpi(e: React.FormEvent) {
     e.preventDefault();
+
+    const currentCtx = await getWorkspaceContext();
+    if (!currentCtx) return;
 
     if (!form.title.trim()) return alert("Please enter KPI title");
     if (!form.category) return alert("Please select KPI category");
@@ -176,27 +262,27 @@ export default function KPIPage() {
       detail: form.detail.trim() || null,
     };
 
-    try {
-      const url = editingId
-        ? `${SUPABASE_URL}/rest/v1/kpis?id=eq.${editingId}`
-        : `${SUPABASE_URL}/rest/v1/kpis`;
+    const result = editingId
+      ? await supabase
+          .from("kpis")
+          .update(payload)
+          .eq("id", editingId)
+          .eq("workspace_id", currentCtx.workspaceId)
+      : await supabase.from("kpis").insert({
+          ...payload,
+          workspace_id: currentCtx.workspaceId,
+          created_by: currentCtx.userId,
+        });
 
-      await fetch(url, {
-        method: editingId ? "PATCH" : "POST",
-        headers: {
-          apikey: SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-          "Content-Type": "application/json",
-          Prefer: "return=minimal",
-        },
-        body: JSON.stringify(payload),
-      });
+    setSaving(false);
 
-      resetForm();
-      await fetchKpis();
-    } finally {
-      setSaving(false);
+    if (result.error) {
+      alert(result.error.message);
+      return;
     }
+
+    resetForm();
+    await fetchKpis(currentCtx);
   }
 
   function startEdit(item: KPI) {
@@ -206,7 +292,7 @@ export default function KPIPage() {
       category: item.category || "",
       target_value: String(item.target_value ?? ""),
       current_value: String(item.current_value ?? ""),
-      unit: item.unit || "Rs",
+      unit: item.unit || "PKR",
       status: item.status || "active",
       due_date: item.due_date || "",
       detail: item.detail || "",
@@ -214,23 +300,29 @@ export default function KPIPage() {
   }
 
   async function deleteKpi(id: string) {
+    const currentCtx = await getWorkspaceContext();
+    if (!currentCtx) return;
+
     if (!confirm("Are you sure you want to delete this KPI?")) return;
 
-    await fetch(`${SUPABASE_URL}/rest/v1/kpis?id=eq.${id}`, {
-      method: "DELETE",
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-      },
-    });
+    const { error } = await supabase
+      .from("kpis")
+      .delete()
+      .eq("id", id)
+      .eq("workspace_id", currentCtx.workspaceId);
 
-    await fetchKpis();
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    await fetchKpis(currentCtx);
   }
 
   function downloadKpiTemplate() {
     const csv = [
       "title,category,target_value,current_value,unit,status,due_date,detail",
-      "Monthly Revenue,Sales,100000,25000,Rs,active,2026-04-30,Track monthly revenue against target",
+      "Monthly Revenue,Sales,100000,25000,PKR,active,2026-04-30,Track monthly revenue against target",
       "Customer Acquisition,Marketing,500,320,Users,active,2026-05-15,Track new customer acquisition",
       "Website Conversion Rate,Growth,5,2.5,%,paused,2026-06-01,Track website lead conversion rate",
     ].join("\n");
@@ -258,6 +350,9 @@ export default function KPIPage() {
   }
 
   async function uploadKpiCsv(e: React.ChangeEvent<HTMLInputElement>) {
+    const currentCtx = await getWorkspaceContext();
+    if (!currentCtx) return;
+
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -274,26 +369,24 @@ export default function KPIPage() {
           category: row.category || "Other",
           target_value: Number(row.target_value || 0),
           current_value: Number(row.current_value || 0),
-          unit: row.unit || "Rs",
+          unit: row.unit || "PKR",
           status: row.status || "active",
           due_date: row.due_date || null,
           detail: row.detail || null,
+          workspace_id: currentCtx.workspaceId,
+          created_by: currentCtx.userId,
         }));
 
       if (!payload.length) return alert("No valid KPI records found.");
 
-      await fetch(`${SUPABASE_URL}/rest/v1/kpis`, {
-        method: "POST",
-        headers: {
-          apikey: SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-          "Content-Type": "application/json",
-          Prefer: "return=minimal",
-        },
-        body: JSON.stringify(payload),
-      });
+      const { error } = await supabase.from("kpis").insert(payload);
 
-      await fetchKpis();
+      if (error) {
+        alert(error.message);
+        return;
+      }
+
+      await fetchKpis(currentCtx);
       alert(`${payload.length} KPI records uploaded successfully.`);
     } finally {
       setBulkUploading(false);
@@ -383,6 +476,12 @@ export default function KPIPage() {
 
   return (
     <div className="min-h-screen bg-[#eef3f8] p-6">
+      {contextError ? (
+        <div className="mb-5 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm font-semibold text-amber-800">
+          {contextError}
+        </div>
+      ) : null}
+
       <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <p className="text-sm font-semibold text-green-600">KPI Tracking</p>
 
@@ -397,7 +496,7 @@ export default function KPIPage() {
           </div>
 
           <button
-            onClick={fetchKpis}
+            onClick={() => loadInitialData()}
             className="rounded-xl bg-green-600 px-5 py-3 text-sm font-bold text-white hover:bg-green-700"
           >
             Refresh Data
@@ -520,7 +619,7 @@ export default function KPIPage() {
 
             <button
               type="submit"
-              disabled={saving}
+              disabled={saving || !!contextError}
               className="w-full rounded-xl bg-green-600 px-4 py-3 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-60"
             >
               {saving ? "Saving..." : editingId ? "Update KPI" : "Add KPI"}
@@ -834,7 +933,7 @@ function CategoryManagerModal({
               Manage KPI Categories
             </h2>
             <p className="mt-1 text-sm text-slate-500">
-              Add, rename, or delete KPI categories.
+              Add, rename, or delete your KPI categories.
             </p>
           </div>
 
@@ -1101,7 +1200,8 @@ function formatKpiValue(value: number, unit?: string | null) {
   const formatted = Number(value).toLocaleString();
   const safeUnit = unit || "";
 
-  if (safeUnit === "Rs") return `Rs ${formatted}`;
+  if (safeUnit === "PKR" || safeUnit === "Rs")
+    return `${safeUnit} ${formatted}`;
   if (safeUnit === "%") return `${formatted}%`;
   if (!safeUnit) return formatted;
 

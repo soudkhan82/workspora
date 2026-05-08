@@ -1,126 +1,269 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
+import { createClientServer } from "@/app/lib/supabase/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+async function getWorkspaceContext() {
+  const supabase = await createClientServer();
 
-const headers = {
-  apikey: SUPABASE_ANON_KEY,
-  Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-  "Content-Type": "application/json",
-};
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+
+  if (userError) {
+    return {
+      supabase,
+      user: null,
+      workspaceId: null,
+      error: userError.message,
+      status: 401,
+    };
+  }
+
+  if (!user) {
+    return {
+      supabase,
+      user: null,
+      workspaceId: null,
+      error: "User not authenticated",
+      status: 401,
+    };
+  }
+
+  const { data: membership, error: membershipError } = await supabase
+    .from("workspace_members")
+    .select("workspace_id,status")
+    .eq("user_id", user.id)
+    .limit(1)
+    .maybeSingle();
+
+  if (membershipError) {
+    return {
+      supabase,
+      user,
+      workspaceId: null,
+      error: membershipError.message,
+      status: 500,
+    };
+  }
+
+  if (!membership?.workspace_id) {
+    return {
+      supabase,
+      user,
+      workspaceId: null,
+      error: "No active workspace found for this user",
+      status: 403,
+    };
+  }
+
+  if (
+    membership.status &&
+    String(membership.status).toLowerCase() !== "active"
+  ) {
+    return {
+      supabase,
+      user,
+      workspaceId: null,
+      error: "Your workspace membership is not active",
+      status: 403,
+    };
+  }
+
+  return {
+    supabase,
+    user,
+    workspaceId: String(membership.workspace_id),
+    error: null,
+    status: 200,
+  };
+}
 
 export async function GET() {
   try {
-    const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/KPI_Categories?select=*&order=name.asc`,
-      { headers, cache: "no-store" },
-    );
+    const ctx = await getWorkspaceContext();
 
-    const data = await res.json();
+    if (ctx.error || !ctx.user || !ctx.workspaceId) {
+      return NextResponse.json(
+        { success: false, categories: [], error: ctx.error },
+        { status: ctx.status },
+      );
+    }
+
+    const { data, error } = await ctx.supabase
+      .from("KPI_Categories")
+      .select("id,name,workspace_id,created_by,created_at")
+      .eq("workspace_id", ctx.workspaceId)
+      .eq("created_by", ctx.user.id)
+      .order("name", { ascending: true });
+
+    if (error) {
+      return NextResponse.json(
+        { success: false, categories: [], error: error.message },
+        { status: 400 },
+      );
+    }
 
     return NextResponse.json({
-      success: res.ok,
-      categories: Array.isArray(data) ? data : [],
-      error: res.ok ? null : data,
+      success: true,
+      categories: data ?? [],
+      error: null,
     });
-  } catch (error) {
+  } catch {
     return NextResponse.json(
-      { success: false, error: "Failed to load categories" },
+      { success: false, categories: [], error: "Failed to load categories" },
       { status: 500 },
     );
   }
 }
 
 export async function POST(req: Request) {
-  const body = await req.json();
-  const name = String(body.name || "").trim();
+  try {
+    const ctx = await getWorkspaceContext();
 
-  if (!name) {
+    if (ctx.error || !ctx.user || !ctx.workspaceId) {
+      return NextResponse.json(
+        { success: false, error: ctx.error },
+        { status: ctx.status },
+      );
+    }
+
+    const body = await req.json();
+    const name = String(body.name || "").trim();
+
+    if (!name) {
+      return NextResponse.json(
+        { success: false, error: "Category name is required" },
+        { status: 400 },
+      );
+    }
+
+    const { data, error } = await ctx.supabase
+      .from("KPI_Categories")
+      .insert({
+        name,
+        workspace_id: ctx.workspaceId,
+        created_by: ctx.user.id,
+      })
+      .select("id,name,workspace_id,created_by,created_at")
+      .single();
+
+    if (error) {
+      return NextResponse.json(
+        { success: false, category: null, error: error.message },
+        { status: 400 },
+      );
+    }
+
+    return NextResponse.json({
+      success: true,
+      category: data,
+      error: null,
+    });
+  } catch {
     return NextResponse.json(
-      { success: false, error: "Category name is required" },
-      { status: 400 },
+      { success: false, error: "Failed to add category" },
+      { status: 500 },
     );
   }
-
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/KPI_Categories`, {
-    method: "POST",
-    headers: {
-      ...headers,
-      Prefer: "return=representation",
-    },
-    body: JSON.stringify({ name }),
-  });
-
-  const data = await res.json();
-
-  return NextResponse.json(
-    {
-      success: res.ok,
-      category: Array.isArray(data) ? data[0] : null,
-      error: res.ok ? null : data,
-    },
-    { status: res.ok ? 200 : 400 },
-  );
 }
 
 export async function PATCH(req: Request) {
-  const body = await req.json();
-  const id = Number(body.id);
-  const name = String(body.name || "").trim();
+  try {
+    const ctx = await getWorkspaceContext();
 
-  if (!id || !name) {
+    if (ctx.error || !ctx.user || !ctx.workspaceId) {
+      return NextResponse.json(
+        { success: false, error: ctx.error },
+        { status: ctx.status },
+      );
+    }
+
+    const body = await req.json();
+    const id = Number(body.id);
+    const name = String(body.name || "").trim();
+
+    if (!id || !name) {
+      return NextResponse.json(
+        { success: false, error: "Category id and name are required" },
+        { status: 400 },
+      );
+    }
+
+    const { data, error } = await ctx.supabase
+      .from("KPI_Categories")
+      .update({ name })
+      .eq("id", id)
+      .eq("workspace_id", ctx.workspaceId)
+      .eq("created_by", ctx.user.id)
+      .select("id,name,workspace_id,created_by,created_at")
+      .single();
+
+    if (error) {
+      return NextResponse.json(
+        { success: false, category: null, error: error.message },
+        { status: 400 },
+      );
+    }
+
+    return NextResponse.json({
+      success: true,
+      category: data,
+      error: null,
+    });
+  } catch {
     return NextResponse.json(
-      { success: false, error: "Category id and name are required" },
-      { status: 400 },
+      { success: false, error: "Failed to update category" },
+      { status: 500 },
     );
   }
-
-  const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/KPI_Categories?id=eq.${id}`,
-    {
-      method: "PATCH",
-      headers: {
-        ...headers,
-        Prefer: "return=representation",
-      },
-      body: JSON.stringify({ name }),
-    },
-  );
-
-  const data = await res.json();
-
-  return NextResponse.json(
-    {
-      success: res.ok,
-      category: Array.isArray(data) ? data[0] : null,
-      error: res.ok ? null : data,
-    },
-    { status: res.ok ? 200 : 400 },
-  );
 }
 
-export async function DELETE(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const id = Number(searchParams.get("id"));
+export async function DELETE(req: NextRequest) {
+  try {
+    const ctx = await getWorkspaceContext();
 
-  if (!id) {
+    if (ctx.error || !ctx.user || !ctx.workspaceId) {
+      return NextResponse.json(
+        { success: false, error: ctx.error },
+        { status: ctx.status },
+      );
+    }
+
+    const id = Number(req.nextUrl.searchParams.get("id"));
+
+    if (!id) {
+      return NextResponse.json(
+        { success: false, error: "Category id is required" },
+        { status: 400 },
+      );
+    }
+
+    const { error } = await ctx.supabase
+      .from("KPI_Categories")
+      .delete()
+      .eq("id", id)
+      .eq("workspace_id", ctx.workspaceId)
+      .eq("created_by", ctx.user.id);
+
+    if (error) {
+      return NextResponse.json(
+        { success: false, error: error.message },
+        { status: 400 },
+      );
+    }
+
+    return NextResponse.json({
+      success: true,
+      error: null,
+    });
+  } catch {
     return NextResponse.json(
-      { success: false, error: "Category id is required" },
-      { status: 400 },
+      { success: false, error: "Failed to delete category" },
+      { status: 500 },
     );
   }
-
-  const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/KPI_Categories?id=eq.${id}`,
-    {
-      method: "DELETE",
-      headers,
-    },
-  );
-
-  return NextResponse.json({ success: res.ok }, { status: res.ok ? 200 : 400 });
 }

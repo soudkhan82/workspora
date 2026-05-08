@@ -1,0 +1,4598 @@
+
+
+======================================================================
+FILE: app/(app)/components/MasterDataManager.tsx
+======================================================================
+
+
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+type TabKey = "clients" | "projects" | "vendors" | "contacts" | "members";
+
+type AnyRow = Record<string, any>;
+
+const tabs: { key: TabKey; label: string; table: string; note: string }[] = [
+  {
+    key: "clients",
+    label: "Clients",
+    table: "clients",
+    note: "Global clients",
+  },
+  {
+    key: "projects",
+    label: "Projects",
+    table: "projects",
+    note: "Global projects",
+  },
+  {
+    key: "vendors",
+    label: "Vendors",
+    table: "vendors",
+    note: "Global vendors",
+  },
+  {
+    key: "contacts",
+    label: "Contacts",
+    table: "contacts",
+    note: "Global contacts",
+  },
+  {
+    key: "members",
+    label: "Members",
+    table: "contacts",
+    note: "Members are managed from public.contacts",
+  },
+];
+
+const emptyForms: Record<TabKey, AnyRow> = {
+  clients: { name: "" },
+  projects: { name: "" },
+  vendors: { name: "" },
+  contacts: {
+    full_name: "",
+    email: "",
+    phone: "",
+    designation: "",
+    company: "",
+    department: "",
+    status: "active",
+    notes: "",
+  },
+  members: {
+    full_name: "",
+    email: "",
+    phone: "",
+    designation: "",
+    company: "",
+    department: "Operations",
+    status: "active",
+    notes: "",
+  },
+};
+
+export default function MasterDataManager() {
+  const [open, setOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabKey>("contacts");
+  const [rows, setRows] = useState<AnyRow[]>([]);
+  const [form, setForm] = useState<AnyRow>({ ...emptyForms.contacts });
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const activeMeta = useMemo(
+    () => tabs.find((t) => t.key === activeTab)!,
+    [activeTab],
+  );
+
+  useEffect(() => {
+    if (open) loadRows();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, activeTab]);
+
+  async function loadRows() {
+    setLoading(true);
+
+    const selectQuery =
+      activeTab === "contacts" || activeTab === "members"
+        ? "id,full_name,email,phone,designation,company,department,status,notes,created_at"
+        : "id,name,created_at";
+
+    const { data, error } = await supabase
+      .from(activeMeta.table)
+      .select(selectQuery)
+      .order("created_at", { ascending: false });
+
+    setLoading(false);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    setRows(data || []);
+    resetForm(false);
+  }
+
+  function resetForm(clearEdit = true) {
+    setForm({ ...emptyForms[activeTab] });
+    if (clearEdit) setEditingId(null);
+  }
+
+  function changeTab(tab: TabKey) {
+    setActiveTab(tab);
+    setForm({ ...emptyForms[tab] });
+    setEditingId(null);
+    setRows([]);
+  }
+
+  function startEdit(row: AnyRow) {
+    setEditingId(row.id);
+    setForm({
+      ...emptyForms[activeTab],
+      ...row,
+    });
+  }
+
+  async function saveRow() {
+    if (activeTab === "contacts" || activeTab === "members") {
+      if (!String(form.full_name || "").trim()) {
+        alert("Full name is required.");
+        return;
+      }
+    } else if (!String(form.name || "").trim()) {
+      alert("Name is required.");
+      return;
+    }
+
+    setSaving(true);
+
+    const payload: AnyRow =
+      activeTab === "contacts" || activeTab === "members"
+        ? {
+            full_name: String(form.full_name || "").trim(),
+            email: form.email || null,
+            phone: form.phone || null,
+            designation: form.designation || null,
+            company: form.company || null,
+            department: form.department || null,
+            status: form.status || "active",
+            notes: form.notes || null,
+          }
+        : {
+            name: String(form.name || "").trim(),
+          };
+
+    const result = editingId
+      ? await supabase
+          .from(activeMeta.table)
+          .update(payload)
+          .eq("id", editingId)
+      : await supabase.from(activeMeta.table).insert(payload);
+
+    setSaving(false);
+
+    if (result.error) {
+      alert(result.error.message);
+      return;
+    }
+
+    await loadRows();
+    resetForm();
+  }
+
+  function uniqueOptions(field: string) {
+    return Array.from(
+      new Set(
+        rows.map((row) => String(row[field] || "").trim()).filter(Boolean),
+      ),
+    ).sort((a, b) => a.localeCompare(b));
+  }
+
+  async function deleteRow(row: AnyRow) {
+    const label = row.full_name || row.name || "this record";
+    const ok = window.confirm(`Delete ${label}?`);
+    if (!ok) return;
+
+    const { error } = await supabase
+      .from(activeMeta.table)
+      .delete()
+      .eq("id", row.id);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    await loadRows();
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="inline-flex w-auto items-center justify-center rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
+      >
+        Master Data
+      </button>
+
+      {open && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/40 px-4">
+          <div className="max-h-[90vh] w-full max-w-6xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-slate-200 px-6 py-5">
+              <div>
+                <p className="text-sm font-semibold text-emerald-600">
+                  Global Master Data
+                </p>
+                <h2 className="text-2xl font-bold text-slate-950">
+                  Clients, Projects, Vendors, Contacts & Members
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Contacts and Members now use <b>public.contacts</b> as the
+                  single source.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="rounded-full bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-200"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="grid max-h-[75vh] grid-cols-1 overflow-y-auto lg:grid-cols-[260px_1fr]">
+              <aside className="border-r border-slate-200 bg-slate-50 p-5">
+                <div className="space-y-2">
+                  {tabs.map((tab) => (
+                    <button
+                      type="button"
+                      key={tab.key}
+                      onClick={() => changeTab(tab.key)}
+                      className={`w-full rounded-xl px-4 py-3 text-left text-sm font-semibold ${
+                        activeTab === tab.key
+                          ? "bg-slate-950 text-white"
+                          : "bg-white text-slate-700 hover:bg-slate-100"
+                      }`}
+                    >
+                      <span className="block">{tab.label}</span>
+                      <span
+                        className={`mt-0.5 block text-xs ${
+                          activeTab === tab.key
+                            ? "text-slate-300"
+                            : "text-slate-400"
+                        }`}
+                      >
+                        {tab.note}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </aside>
+
+              <main className="p-6">
+                <div className="mb-5 rounded-2xl border border-slate-200 bg-white p-5">
+                  <div className="mb-4 flex items-center justify-between">
+                    <div>
+                      <h3 className="text-xl font-bold text-slate-950">
+                        {editingId ? "Modify" : "Add"} {activeMeta.label}
+                      </h3>
+                      <p className="text-sm text-slate-500">
+                        Table: {activeMeta.table}
+                      </p>
+                    </div>
+
+                    {editingId && (
+                      <button
+                        type="button"
+                        onClick={() => resetForm()}
+                        className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold"
+                      >
+                        Cancel Edit
+                      </button>
+                    )}
+                  </div>
+
+                  {activeTab === "contacts" || activeTab === "members" ? (
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                      <Input
+                        label="Full Name"
+                        value={form.full_name || ""}
+                        onChange={(v) => setForm({ ...form, full_name: v })}
+                      />
+                      <Input
+                        label="Email"
+                        value={form.email || ""}
+                        onChange={(v) => setForm({ ...form, email: v })}
+                      />
+                      <Input
+                        label="Phone"
+                        value={form.phone || ""}
+                        onChange={(v) => setForm({ ...form, phone: v })}
+                      />
+                      <EditableDropdown
+                        label="Designation"
+                        value={form.designation || ""}
+                        options={uniqueOptions("designation")}
+                        placeholder="Select or type designation"
+                        onChange={(v) => setForm({ ...form, designation: v })}
+                      />
+                      <EditableDropdown
+                        label="Company"
+                        value={form.company || ""}
+                        options={uniqueOptions("company")}
+                        placeholder="Select or type company"
+                        onChange={(v) => setForm({ ...form, company: v })}
+                      />
+                      <EditableDropdown
+                        label="Department"
+                        value={form.department || ""}
+                        options={uniqueOptions("department")}
+                        placeholder="Select or type department"
+                        onChange={(v) => setForm({ ...form, department: v })}
+                      />
+                      <Select
+                        label="Status"
+                        value={form.status || "active"}
+                        onChange={(v) => setForm({ ...form, status: v })}
+                        options={[
+                          { value: "active", label: "Active" },
+                          { value: "inactive", label: "Inactive" },
+                          { value: "paused", label: "Paused" },
+                        ]}
+                      />
+                      <Input
+                        label="Notes"
+                        value={form.notes || ""}
+                        onChange={(v) => setForm({ ...form, notes: v })}
+                      />
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                      <Input
+                        label="Name"
+                        value={form.name || ""}
+                        onChange={(v) => setForm({ ...form, name: v })}
+                      />
+                    </div>
+                  )}
+
+                  <div className="mt-5 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={saveRow}
+                      disabled={saving}
+                      className="rounded-xl bg-emerald-600 px-6 py-3 text-sm font-bold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
+                    >
+                      {saving ? "Saving..." : editingId ? "Update" : "Add"}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                  <div className="border-b border-slate-200 px-5 py-4">
+                    <h3 className="text-lg font-bold text-slate-950">
+                      Existing {activeMeta.label}
+                    </h3>
+                  </div>
+
+                  {loading ? (
+                    <div className="p-8 text-center text-sm text-slate-500">
+                      Loading records...
+                    </div>
+                  ) : rows.length === 0 ? (
+                    <div className="p-8 text-center text-sm text-slate-500">
+                      No records found.
+                    </div>
+                  ) : (
+                    <div className="max-h-[340px] overflow-auto">
+                      <table className="w-full text-left text-sm">
+                        <thead className="sticky top-0 bg-slate-950 text-xs uppercase text-white">
+                          <tr>
+                            <th className="px-4 py-3">Name</th>
+                            {(activeTab === "contacts" ||
+                              activeTab === "members") && (
+                              <>
+                                <th className="px-4 py-3">Email / Phone</th>
+                                <th className="px-4 py-3">Designation</th>
+                                <th className="px-4 py-3">Company</th>
+                              </>
+                            )}
+                            <th className="px-4 py-3">Status</th>
+                            <th className="px-4 py-3 text-right">Actions</th>
+                          </tr>
+                        </thead>
+
+                        <tbody className="divide-y divide-slate-100">
+                          {rows.map((row) => (
+                            <tr key={row.id} className="hover:bg-slate-50">
+                              <td className="px-4 py-3 font-semibold text-slate-900">
+                                {row.full_name || row.name}
+                              </td>
+
+                              {(activeTab === "contacts" ||
+                                activeTab === "members") && (
+                                <>
+                                  <td className="px-4 py-3 text-slate-600">
+                                    {row.email || "-"}
+                                    <br />
+                                    <span className="text-xs">
+                                      {row.phone || "-"}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-3 text-slate-600">
+                                    {row.designation || "-"}
+                                  </td>
+                                  <td className="px-4 py-3 text-slate-600">
+                                    {row.company || "-"}
+                                  </td>
+                                </>
+                              )}
+
+                              <td className="px-4 py-3">
+                                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                                  {row.status || "active"}
+                                </span>
+                              </td>
+
+                              <td className="px-4 py-3 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => startEdit(row)}
+                                  className="mr-2 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold hover:bg-slate-100"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => deleteRow(row)}
+                                  className="rounded-lg bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-100"
+                                >
+                                  Delete
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </main>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function Input({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">
+        {label}
+      </span>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500"
+      />
+    </label>
+  );
+}
+
+function EditableDropdown({
+  label,
+  value,
+  onChange,
+  options,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: string[];
+  placeholder?: string;
+}) {
+  const listId = `${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-options`;
+
+  return (
+    <label className="block">
+      <span className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">
+        {label}
+      </span>
+      <input
+        list={listId}
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-500"
+      />
+      <datalist id={listId}>
+        {options.map((opt) => (
+          <option key={opt} value={opt} />
+        ))}
+      </datalist>
+    </label>
+  );
+}
+
+function Select({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: { value: string; label: string }[];
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">
+        {label}
+      </span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500"
+      >
+        {options.map((opt) => (
+          <option key={opt.value || "empty"} value={opt.value}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+
+
+
+
+======================================================================
+FILE: app/(app)/modules/purchase-orders/page.tsx
+======================================================================
+
+
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const currencies = ["PKR", "USD", "EUR", "GBP", "AED", "SAR", "CNY"];
+
+type DropdownItem = {
+  id: number;
+  name: string;
+};
+
+type PurchaseOrder = {
+  id: number;
+  po_no: string;
+  client_id: number | null;
+  project_id: number | null;
+  global_client_id?: number | null;
+  global_project_id?: number | null;
+  status_id: number | null;
+  line_code: string;
+  line_item: string;
+  unit_price: number;
+  unit_of_measurement: string | null;
+  currency: string | null;
+  quantity: number;
+  delivery_date: string | null;
+  notes: string | null;
+  created_at?: string;
+  client_name?: string | null;
+  project_name?: string | null;
+  status?: string | null;
+};
+
+type DropdownType = "client" | "project" | "status";
+
+type PoHeaderForm = {
+  po_no: string;
+  client_id: string;
+  project_id: string;
+  status_id: string;
+  currency: string;
+  delivery_date: string;
+  notes: string;
+};
+
+type PoLineForm = {
+  id?: number;
+  line_code: string;
+  line_item: string;
+  unit_price: string;
+  unit_of_measurement: string;
+  quantity: string;
+};
+
+type LineCatalogItem = {
+  id?: number;
+  line_code: string;
+  line_item: string;
+  unit_price: number;
+  unit_of_measurement: string;
+};
+
+type PoGroup = {
+  po_no: string;
+  po_date: string | null;
+  client_name: string | null;
+  project_name: string | null;
+  status: string | null;
+  currency: string;
+  total: number;
+  rowCount: number;
+  rows: PurchaseOrder[];
+};
+
+const emptyHeader: PoHeaderForm = {
+  po_no: "",
+  client_id: "",
+  project_id: "",
+  status_id: "",
+  currency: "PKR",
+  delivery_date: "",
+  notes: "",
+};
+
+const emptyLine: PoLineForm = {
+  line_code: "",
+  line_item: "",
+  unit_price: "",
+  unit_of_measurement: "",
+  quantity: "",
+};
+
+const emptyMasterLineItem = {
+  line_code: "",
+  line_item: "",
+  unit_of_measurement: "",
+  unit_price: "",
+};
+
+const defaultLineCatalog: LineCatalogItem[] = [
+  {
+    line_code: "LC-001-001",
+    line_item: "Fiber Cable",
+    unit_of_measurement: "Meter",
+    unit_price: 3819,
+  },
+  {
+    line_code: "LC-002-002",
+    line_item: "Patch Cord",
+    unit_of_measurement: "Piece",
+    unit_price: 2403,
+  },
+  {
+    line_code: "LC-008-008",
+    line_item: "UPS Battery",
+    unit_of_measurement: "Unit",
+    unit_price: 8779,
+  },
+];
+
+export default function PurchaseOrdersPage() {
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const lineMasterFileRef = useRef<HTMLInputElement | null>(null);
+
+  const [orders, setOrders] = useState<PurchaseOrder[]>([]);
+  const [clients, setClients] = useState<DropdownItem[]>([]);
+  const [projects, setProjects] = useState<DropdownItem[]>([]);
+  const [statuses, setStatuses] = useState<DropdownItem[]>([]);
+
+  const [headerForm, setHeaderForm] = useState<PoHeaderForm>(emptyHeader);
+  const [lineRows, setLineRows] = useState<PoLineForm[]>([]);
+  const [masterLineItems, setMasterLineItems] = useState<LineCatalogItem[]>([]);
+  const [showLineMasterModal, setShowLineMasterModal] = useState(false);
+  const [lineMasterForm, setLineMasterForm] = useState({
+    ...emptyMasterLineItem,
+  });
+  const [editingMasterLineCode, setEditingMasterLineCode] = useState<
+    string | null
+  >(null);
+  const [selectedMasterLineCodes, setSelectedMasterLineCodes] = useState<
+    string[]
+  >([]);
+  const [lineMasterSearch, setLineMasterSearch] = useState("");
+  const [editingPoNo, setEditingPoNo] = useState<string | null>(null);
+
+  const [lineItemModalOpen, setLineItemModalOpen] = useState(false);
+  const [editingLineIndex, setEditingLineIndex] = useState<number | null>(null);
+  const [lineSearch, setLineSearch] = useState("");
+  const [lineDraft, setLineDraft] = useState<PoLineForm>(emptyLine);
+
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  const [showPoModal, setShowPoModal] = useState(false);
+  const [dropdownModal, setDropdownModal] = useState<DropdownType | null>(null);
+  const [dropdownName, setDropdownName] = useState("");
+  const [editingDropdownId, setEditingDropdownId] = useState<number | null>(
+    null,
+  );
+
+  useEffect(() => {
+    loadAll();
+  }, []);
+
+  async function loadAll() {
+    setLoading(true);
+    await Promise.all([
+      loadOrders(),
+      loadClients(),
+      loadProjects(),
+      loadStatuses(),
+      loadLineItemsMaster(),
+    ]);
+    setLoading(false);
+  }
+
+  async function loadOrders() {
+    const { data, error } = await supabase
+      .from("purchase_orders")
+      .select(
+        `
+        *,
+        clients!global_client_id(name),
+        projects!global_project_id(name),
+        po_statuses(name)
+      `,
+      )
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    setOrders(
+      data?.map((po: any) => ({
+        ...po,
+        client_name: po.clients?.name ?? null,
+        project_name: po.projects?.name ?? null,
+        status: po.po_statuses?.name ?? null,
+      })) ?? [],
+    );
+  }
+
+  async function loadClients() {
+    const { data } = await supabase.from("clients").select("*").order("name");
+    setClients(data ?? []);
+  }
+
+  async function loadProjects() {
+    const { data } = await supabase.from("projects").select("*").order("name");
+    setProjects(data ?? []);
+  }
+
+  async function loadStatuses() {
+    const { data } = await supabase
+      .from("po_statuses")
+      .select("*")
+      .order("name");
+    setStatuses(data ?? []);
+  }
+
+  async function loadLineItemsMaster() {
+    const { data, error } = await supabase
+      .from("line_items_master")
+      .select("*")
+      .order("line_code", { ascending: true })
+      .range(0, 9999);
+
+    // Keep page usable even if the master table is not ready.
+    if (error) {
+      console.warn("line_items_master load warning:", error.message);
+      setMasterLineItems([]);
+      return;
+    }
+
+    // Supports both old and new column names:
+    // line_item OR item_description OR description
+    // unit_of_measurement OR uom
+    setMasterLineItems(
+      (data ?? [])
+        .map((item: any) => {
+          const lineCode = String(item.line_code ?? item.code ?? "").trim();
+          const description = String(
+            item.line_item ?? item.item_description ?? item.description ?? "",
+          ).trim();
+          const uom = String(
+            item.unit_of_measurement ?? item.uom ?? item.unit ?? "",
+          ).trim();
+
+          return {
+            id: item.id,
+            line_code: lineCode,
+            line_item: description,
+            unit_price: Number(item.unit_price ?? item.price ?? 0),
+            unit_of_measurement: uom,
+          };
+        })
+        .filter((item) => item.line_code),
+    );
+  }
+
+  const lineCatalog = useMemo(() => {
+    const map = new Map<string, LineCatalogItem>();
+
+    for (const item of defaultLineCatalog) {
+      map.set(item.line_code, item);
+    }
+
+    for (const item of masterLineItems) {
+      if (!item.line_code) continue;
+      map.set(item.line_code, item);
+    }
+
+    for (const po of orders) {
+      if (!po.line_code) continue;
+      map.set(po.line_code, {
+        line_code: po.line_code,
+        line_item: po.line_item ?? "",
+        unit_price: Number(po.unit_price || 0),
+        unit_of_measurement: po.unit_of_measurement ?? "",
+      });
+    }
+
+    return Array.from(map.values()).sort((a, b) =>
+      a.line_code.localeCompare(b.line_code),
+    );
+  }, [orders, masterLineItems]);
+
+  const filteredMasterLineItems = useMemo(() => {
+    const q = lineMasterSearch.trim().toLowerCase();
+    if (!q) return masterLineItems;
+
+    return masterLineItems.filter((item) =>
+      [
+        item.line_code,
+        item.line_item,
+        item.unit_of_measurement,
+        String(item.unit_price),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(q),
+    );
+  }, [masterLineItems, lineMasterSearch]);
+
+  const allFilteredMasterSelected =
+    filteredMasterLineItems.length > 0 &&
+    filteredMasterLineItems.every((item) =>
+      selectedMasterLineCodes.includes(item.line_code),
+    );
+
+  const poGroups = useMemo(() => {
+    const map = new Map<string, PurchaseOrder[]>();
+
+    for (const row of orders) {
+      const key = row.po_no || `PO-${row.id}`;
+      const existing = map.get(key) ?? [];
+      existing.push(row);
+      map.set(key, existing);
+    }
+
+    return Array.from(map.entries()).map(([poNo, rows]) => {
+      const first = rows[0];
+      const total = rows.reduce(
+        (sum, row) =>
+          sum + Number(row.unit_price || 0) * Number(row.quantity || 0),
+        0,
+      );
+
+      return {
+        po_no: poNo,
+        po_date: first.delivery_date ?? first.created_at ?? null,
+        client_name: first.client_name ?? null,
+        project_name: first.project_name ?? null,
+        status: first.status ?? null,
+        currency: first.currency || "PKR",
+        total,
+        rowCount: rows.length,
+        rows,
+      } satisfies PoGroup;
+    });
+  }, [orders]);
+
+  const filteredGroups = useMemo(() => {
+    const q = search.toLowerCase().trim();
+    if (!q) return poGroups;
+
+    return poGroups.filter((po) =>
+      [
+        po.po_no,
+        po.po_date,
+        po.client_name,
+        po.project_name,
+        po.status,
+        po.currency,
+        ...po.rows.flatMap((row) => [
+          row.line_code,
+          row.line_item,
+          row.unit_of_measurement,
+          row.notes,
+        ]),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(q),
+    );
+  }, [poGroups, search]);
+
+  const summary = useMemo(() => {
+    const totalOrders = poGroups.length;
+    const totalByCurrency: Record<string, number> = {};
+    const openByCurrency: Record<string, number> = {};
+    const deliveredByCurrency: Record<string, number> = {};
+
+    for (const po of poGroups) {
+      const currency = po.currency || "PKR";
+      const status = String(po.status || "").toLowerCase();
+
+      totalByCurrency[currency] = (totalByCurrency[currency] || 0) + po.total;
+
+      if (!["delivered", "closed", "cancelled"].includes(status)) {
+        openByCurrency[currency] = (openByCurrency[currency] || 0) + po.total;
+      }
+
+      if (status === "delivered" || status === "closed") {
+        deliveredByCurrency[currency] =
+          (deliveredByCurrency[currency] || 0) + po.total;
+      }
+    }
+
+    return {
+      totalOrders,
+      totalByCurrency,
+      openByCurrency,
+      deliveredByCurrency,
+    };
+  }, [poGroups]);
+
+  const poTotal = useMemo(() => {
+    return lineRows.reduce(
+      (sum, row) =>
+        sum + Number(row.quantity || 0) * Number(row.unit_price || 0),
+      0,
+    );
+  }, [lineRows]);
+
+  function formatNumber(value: number) {
+    return Number(value || 0).toLocaleString();
+  }
+
+  function formatDate(value?: string | null) {
+    if (!value) return "-";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toISOString().slice(0, 10);
+  }
+
+  function openAddPo() {
+    setHeaderForm(emptyHeader);
+    setLineRows([]);
+    setEditingPoNo(null);
+    setShowPoModal(true);
+  }
+
+  function openEditPo(group: PoGroup) {
+    const first = group.rows[0];
+
+    setEditingPoNo(group.po_no);
+    setHeaderForm({
+      po_no: first.po_no ?? "",
+      client_id: first.global_client_id ? String(first.global_client_id) : "",
+      project_id: first.global_project_id
+        ? String(first.global_project_id)
+        : "",
+      status_id: first.status_id ? String(first.status_id) : "",
+      currency: first.currency ?? "PKR",
+      delivery_date: first.delivery_date ?? "",
+      notes: first.notes ?? "",
+    });
+
+    setLineRows(
+      group.rows.map((row) => ({
+        id: row.id,
+        line_code: row.line_code ?? "",
+        line_item: row.line_item ?? "",
+        unit_price: String(row.unit_price ?? ""),
+        unit_of_measurement: row.unit_of_measurement ?? "",
+        quantity: String(row.quantity ?? ""),
+      })),
+    );
+
+    setShowPoModal(true);
+  }
+
+  function addLineRow() {
+    setEditingLineIndex(null);
+    setLineDraft({ ...emptyLine });
+    setLineSearch("");
+    setLineItemModalOpen(true);
+  }
+
+  function openEditLineRow(index: number) {
+    const row = lineRows[index];
+    setEditingLineIndex(index);
+    setLineDraft({ ...row });
+    setLineSearch(row.line_code ? `${row.line_code} ${row.line_item}` : "");
+    setLineItemModalOpen(true);
+  }
+
+  function closeLineItemModal() {
+    setLineItemModalOpen(false);
+    setEditingLineIndex(null);
+    setLineDraft({ ...emptyLine });
+    setLineSearch("");
+  }
+
+  function selectLineCatalogItem(item: LineCatalogItem) {
+    setLineDraft((prev) => ({
+      ...prev,
+      line_code: item.line_code,
+      line_item: item.line_item,
+      unit_of_measurement: item.unit_of_measurement,
+      unit_price: String(item.unit_price ?? 0),
+    }));
+    setLineSearch(`${item.line_code} ${item.line_item}`);
+  }
+
+  function saveLineItemToPo() {
+    if (!lineDraft.line_code.trim()) return alert("Please select a line code.");
+    if (Number(lineDraft.quantity || 0) <= 0) {
+      return alert("Please enter quantity greater than zero.");
+    }
+
+    if (editingLineIndex === null) {
+      setLineRows((prev) => [...prev, { ...lineDraft }]);
+    } else {
+      setLineRows((prev) =>
+        prev.map((row, index) =>
+          index === editingLineIndex ? { ...lineDraft } : row,
+        ),
+      );
+    }
+
+    closeLineItemModal();
+  }
+
+  function removeLineRow(index: number) {
+    setLineRows((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function updateLineRow(index: number, key: keyof PoLineForm, value: string) {
+    setLineRows((prev) =>
+      prev.map((row, i) => (i === index ? { ...row, [key]: value } : row)),
+    );
+  }
+
+  function handleLineCodeChange(index: number, lineCode: string) {
+    const selected = lineCatalog.find((item) => item.line_code === lineCode);
+
+    setLineRows((prev) =>
+      prev.map((row, i) =>
+        i === index
+          ? {
+              ...row,
+              line_code: lineCode,
+              line_item: selected?.line_item ?? "",
+              unit_of_measurement: selected?.unit_of_measurement ?? "",
+              unit_price:
+                selected?.unit_price !== undefined
+                  ? String(selected.unit_price)
+                  : "",
+            }
+          : row,
+      ),
+    );
+  }
+
+  async function savePo() {
+    if (!headerForm.po_no.trim()) return alert("PO No is required.");
+    if (!lineRows.length) return alert("Please add at least one line item.");
+
+    const validLines = lineRows.filter(
+      (row) => row.line_code.trim() && Number(row.quantity || 0) > 0,
+    );
+
+    if (!validLines.length) {
+      return alert("Select line code and enter quantity for at least one row.");
+    }
+
+    const cleanPoNo = headerForm.po_no.trim();
+
+    if (!editingPoNo) {
+      const { data: existingPO, error: existingError } = await supabase
+        .from("purchase_orders")
+        .select("id")
+        .eq("po_no", cleanPoNo)
+        .maybeSingle();
+
+      if (existingError) return alert(existingError.message);
+
+      if (existingPO) {
+        return alert(
+          `PO No "${cleanPoNo}" already exists. Please use a unique PO No.`,
+        );
+      }
+    }
+
+    const payload = validLines.map((row) => ({
+      po_no: cleanPoNo,
+      global_client_id: headerForm.client_id
+        ? Number(headerForm.client_id)
+        : null,
+      global_project_id: headerForm.project_id
+        ? Number(headerForm.project_id)
+        : null,
+      status_id: headerForm.status_id ? Number(headerForm.status_id) : null,
+      line_code: row.line_code.trim(),
+      line_item: row.line_item.trim(),
+      unit_price: Number(row.unit_price || 0),
+      unit_of_measurement: row.unit_of_measurement || null,
+      currency: headerForm.currency || "PKR",
+      quantity: Number(row.quantity || 0),
+      delivery_date: headerForm.delivery_date || null,
+      notes: headerForm.notes || null,
+    }));
+
+    if (editingPoNo) {
+      const { error: deleteError } = await supabase
+        .from("purchase_orders")
+        .delete()
+        .eq("po_no", editingPoNo);
+
+      if (deleteError) return alert(deleteError.message);
+    }
+
+    const { error: insertError } = await supabase
+      .from("purchase_orders")
+      .insert(payload);
+
+    if (insertError) return alert(insertError.message);
+
+    alert(editingPoNo ? "PO updated successfully." : "PO saved successfully.");
+
+    setShowPoModal(false);
+    setEditingPoNo(null);
+    setHeaderForm(emptyHeader);
+    setLineRows([]);
+    await loadOrders();
+  }
+  async function deletePo(poNo: string) {
+    if (!confirm("Delete this purchase order and all linked line items?"))
+      return;
+
+    const { error } = await supabase
+      .from("purchase_orders")
+      .delete()
+      .eq("po_no", poNo);
+
+    if (error) return alert(error.message);
+
+    await loadOrders();
+  }
+
+  function downloadCsvTemplate() {
+    const headers = [
+      "po_no",
+      "client_name",
+      "project_name",
+      "status",
+      "line_code",
+      "line_item",
+      "unit_price",
+      "unit_of_measurement",
+      "currency",
+      "quantity",
+      "delivery_date",
+      "notes",
+    ];
+
+    const sampleRows = [
+      [
+        "PO-001",
+        "Connect",
+        "NYC 2K Rollout",
+        "Issued",
+        "LC-001-001",
+        "Fiber Cable",
+        "3819",
+        "Meter",
+        "PKR",
+        "10",
+        "2026-06-30",
+        "Sample PO line 1",
+      ],
+      [
+        "PO-001",
+        "Connect",
+        "NYC 2K Rollout",
+        "Issued",
+        "LC-008-008",
+        "UPS Battery",
+        "8779",
+        "Unit",
+        "PKR",
+        "2",
+        "2026-06-30",
+        "Sample PO line 2",
+      ],
+    ];
+
+    const csv = [
+      headers.join(","),
+      ...sampleRows.map((row) => row.map(csvEscape).join(",")),
+    ].join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "purchase_orders_template.csv";
+    a.click();
+
+    URL.revokeObjectURL(url);
+  }
+
+  function csvEscape(value: string) {
+    return `"${String(value).replaceAll('"', '""')}"`;
+  }
+
+  function parseCsv(text: string) {
+    const rows: string[][] = [];
+    let current = "";
+    let row: string[] = [];
+    let inQuotes = false;
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      const next = text[i + 1];
+
+      if (char === '"' && inQuotes && next === '"') {
+        current += '"';
+        i++;
+      } else if (char === '"') {
+        inQuotes = !inQuotes;
+      } else if (char === "," && !inQuotes) {
+        row.push(current.trim());
+        current = "";
+      } else if ((char === "\n" || char === "\r") && !inQuotes) {
+        if (current || row.length) {
+          row.push(current.trim());
+          rows.push(row);
+          row = [];
+          current = "";
+        }
+        if (char === "\r" && next === "\n") i++;
+      } else {
+        current += char;
+      }
+    }
+
+    if (current || row.length) {
+      row.push(current.trim());
+      rows.push(row);
+    }
+
+    return rows;
+  }
+
+  async function handleCsvUpload(file: File) {
+    const text = await file.text();
+    const rows = parseCsv(text);
+
+    if (rows.length < 2) {
+      alert("CSV has no data rows.");
+      return;
+    }
+
+    const headers = rows[0].map((h) => h.trim().toLowerCase());
+    const dataRows = rows.slice(1).filter((r) => r.some(Boolean));
+
+    const get = (row: string[], key: string) => row[headers.indexOf(key)] ?? "";
+
+    const clientMap = new Map(clients.map((c) => [c.name.toLowerCase(), c.id]));
+    const projectMap = new Map(
+      projects.map((p) => [p.name.toLowerCase(), p.id]),
+    );
+    const statusMap = new Map(
+      statuses.map((s) => [s.name.toLowerCase(), s.id]),
+    );
+
+    const payload = dataRows.map((row) => ({
+      po_no: get(row, "po_no"),
+      global_client_id:
+        clientMap.get(get(row, "client_name").toLowerCase()) ?? null,
+      global_project_id:
+        projectMap.get(get(row, "project_name").toLowerCase()) ?? null,
+      status_id: statusMap.get(get(row, "status").toLowerCase()) ?? null,
+      line_code: get(row, "line_code"),
+      line_item: get(row, "line_item"),
+      unit_price: Number(get(row, "unit_price") || 0),
+      unit_of_measurement: get(row, "unit_of_measurement") || null,
+      currency: get(row, "currency") || "PKR",
+      quantity: Number(get(row, "quantity") || 0),
+      delivery_date: get(row, "delivery_date") || null,
+      notes: get(row, "notes") || null,
+    }));
+
+    const valid = payload.filter((x) => x.po_no && x.line_code && x.line_item);
+
+    if (!valid.length) {
+      alert("No valid records found. Required: po_no, line_code, line_item.");
+      return;
+    }
+
+    const { error } = await supabase.from("purchase_orders").insert(valid);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    alert(`${valid.length} purchase order line records uploaded successfully.`);
+    await loadOrders();
+
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  function openLineMasterModal() {
+    setShowLineMasterModal(true);
+    setLineMasterForm({ ...emptyMasterLineItem });
+    setEditingMasterLineCode(null);
+    setSelectedMasterLineCodes([]);
+    setLineMasterSearch("");
+  }
+
+  function editMasterLineItem(item: LineCatalogItem) {
+    setLineMasterForm({
+      line_code: item.line_code,
+      line_item: item.line_item,
+      unit_of_measurement: item.unit_of_measurement,
+      unit_price: String(item.unit_price ?? 0),
+    });
+    setEditingMasterLineCode(item.line_code);
+  }
+
+  function resetLineMasterForm() {
+    setLineMasterForm({ ...emptyMasterLineItem });
+    setEditingMasterLineCode(null);
+  }
+
+  async function saveMasterLineItem() {
+    const lineCode = lineMasterForm.line_code.trim();
+    const lineItem = lineMasterForm.line_item.trim();
+    const uom = lineMasterForm.unit_of_measurement.trim();
+    const price = Number(lineMasterForm.unit_price || 0);
+
+    if (!lineCode || !lineItem || !uom) {
+      alert("Line Code, Item Description and UOM are required.");
+      return;
+    }
+
+    if (editingMasterLineCode) {
+      const { error } = await supabase
+        .from("line_items_master")
+        .update({
+          line_code: lineCode,
+          line_item: lineItem,
+          unit_of_measurement: uom,
+          unit_price: price,
+        })
+        .eq("line_code", editingMasterLineCode);
+
+      if (error) return alert(error.message);
+    } else {
+      const { error } = await supabase.from("line_items_master").upsert(
+        {
+          line_code: lineCode,
+          line_item: lineItem,
+          unit_of_measurement: uom,
+          unit_price: price,
+        },
+        { onConflict: "line_code" },
+      );
+
+      if (error) return alert(error.message);
+    }
+
+    resetLineMasterForm();
+    await loadLineItemsMaster();
+  }
+
+  async function deleteMasterLineItem(lineCode: string) {
+    if (!confirm("Delete this line item from master list?")) return;
+
+    const { error } = await supabase
+      .from("line_items_master")
+      .delete()
+      .eq("line_code", lineCode);
+
+    if (error) return alert(error.message);
+
+    setSelectedMasterLineCodes((prev) =>
+      prev.filter((code) => code !== lineCode),
+    );
+    await loadLineItemsMaster();
+  }
+
+  async function bulkDeleteMasterLineItems() {
+    if (!selectedMasterLineCodes.length) return;
+    if (
+      !confirm(
+        `Delete ${selectedMasterLineCodes.length} selected line item(s)?`,
+      )
+    )
+      return;
+
+    const { error } = await supabase
+      .from("line_items_master")
+      .delete()
+      .in("line_code", selectedMasterLineCodes);
+
+    if (error) return alert(error.message);
+
+    setSelectedMasterLineCodes([]);
+    await loadLineItemsMaster();
+  }
+
+  function toggleMasterLineSelection(lineCode: string) {
+    setSelectedMasterLineCodes((prev) =>
+      prev.includes(lineCode)
+        ? prev.filter((code) => code !== lineCode)
+        : [...prev, lineCode],
+    );
+  }
+
+  function toggleAllFilteredMasterLines() {
+    const filteredCodes = filteredMasterLineItems.map((item) => item.line_code);
+
+    if (allFilteredMasterSelected) {
+      setSelectedMasterLineCodes((prev) =>
+        prev.filter((code) => !filteredCodes.includes(code)),
+      );
+    } else {
+      setSelectedMasterLineCodes((prev) =>
+        Array.from(new Set([...prev, ...filteredCodes])),
+      );
+    }
+  }
+
+  function downloadLineItemsTemplate() {
+    const headers = [
+      "line_code",
+      "line_item",
+      "unit_of_measurement",
+      "unit_price",
+    ];
+    const rows = [
+      ["LC-001-001", "Fiber Cable", "Meter", "3819"],
+      ["LC-008-008", "UPS Battery", "Unit", "8779"],
+    ];
+    const csv = [
+      headers.join(","),
+      ...rows.map((row) => row.map(csvEscape).join(",")),
+    ].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "po_line_items_template.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleLineItemsCsvUpload(file: File) {
+    const text = await file.text();
+    const rows = parseCsv(text);
+
+    if (rows.length < 2) {
+      alert("CSV has no data rows.");
+      return;
+    }
+
+    const headers = rows[0].map((h) => h.trim().toLowerCase());
+    const get = (row: string[], keys: string[]) => {
+      for (const key of keys) {
+        const idx = headers.indexOf(key);
+        if (idx >= 0) return row[idx] ?? "";
+      }
+      return "";
+    };
+
+    const payload = rows
+      .slice(1)
+      .filter((row) => row.some(Boolean))
+      .map((row) => ({
+        line_code: get(row, ["line_code", "code"]).trim(),
+        line_item: get(row, [
+          "line_item",
+          "item_description",
+          "description",
+        ]).trim(),
+        unit_of_measurement: get(row, [
+          "unit_of_measurement",
+          "uom",
+          "unit",
+        ]).trim(),
+        unit_price: Number(get(row, ["unit_price", "price"]) || 0),
+      }))
+      .filter(
+        (item) => item.line_code && item.line_item && item.unit_of_measurement,
+      );
+
+    if (!payload.length) {
+      alert(
+        "No valid rows found. Required columns: line_code, line_item, unit_of_measurement, unit_price.",
+      );
+      return;
+    }
+
+    const { error } = await supabase
+      .from("line_items_master")
+      .upsert(payload, { onConflict: "line_code" });
+
+    if (error) return alert(error.message);
+
+    alert(`${payload.length} line item(s) uploaded successfully.`);
+    await loadLineItemsMaster();
+    if (lineMasterFileRef.current) lineMasterFileRef.current.value = "";
+  }
+
+  function getDropdownItems() {
+    if (dropdownModal === "client") return clients;
+    if (dropdownModal === "project") return projects;
+    if (dropdownModal === "status") return statuses;
+    return [];
+  }
+
+  function getDropdownTable() {
+    if (dropdownModal === "client") return "clients";
+    if (dropdownModal === "project") return "projects";
+    if (dropdownModal === "status") return "po_statuses";
+    return "";
+  }
+
+  function getDropdownTitle() {
+    if (dropdownModal === "client") return "Manage Clients";
+    if (dropdownModal === "project") return "Manage Projects";
+    if (dropdownModal === "status") return "Manage Statuses";
+    return "";
+  }
+
+  async function refreshDropdown() {
+    if (dropdownModal === "client") await loadClients();
+    if (dropdownModal === "project") await loadProjects();
+    if (dropdownModal === "status") await loadStatuses();
+  }
+
+  async function saveDropdownItem() {
+    const table = getDropdownTable();
+    if (!table || !dropdownName.trim()) return;
+
+    const payload = { name: dropdownName.trim() };
+
+    const { error } = editingDropdownId
+      ? await supabase.from(table).update(payload).eq("id", editingDropdownId)
+      : await supabase.from(table).insert(payload);
+
+    if (error) return alert(error.message);
+
+    setDropdownName("");
+    setEditingDropdownId(null);
+    await refreshDropdown();
+    await loadOrders();
+  }
+
+  async function deleteDropdownItem(id: number) {
+    const table = getDropdownTable();
+    if (!table) return;
+    if (!confirm("Delete this item? Existing POs will keep empty reference."))
+      return;
+
+    const { error } = await supabase.from(table).delete().eq("id", id);
+    if (error) return alert(error.message);
+
+    await refreshDropdown();
+    await loadOrders();
+  }
+
+  function openDropdownModal(type: DropdownType) {
+    setDropdownModal(type);
+    setDropdownName("");
+    setEditingDropdownId(null);
+  }
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[70vh] items-center justify-center">
+        <div className="rounded-2xl bg-slate-900 px-10 py-8 text-center shadow-xl">
+          <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-slate-500 border-t-white" />
+          <div className="text-lg font-bold text-white">
+            Loading dashboard...
+          </div>
+          <div className="mt-1 text-sm text-slate-300">
+            Please wait while data is being fetched
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-[120px] py-12">
+      <div className="mb-8 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-950">
+            Purchase Orders
+          </h1>
+          <p className="mt-1 max-w-xl text-sm text-slate-600">
+            Manage purchase order header records with linked line items in a
+            clean sub-form layout.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap justify-end gap-3">
+          <button
+            onClick={() => openDropdownModal("client")}
+            className="topBtn"
+          >
+            Manage Clients
+          </button>
+          <button
+            onClick={() => openDropdownModal("project")}
+            className="topBtn"
+          >
+            Manage Projects
+          </button>
+          <button
+            onClick={() => openDropdownModal("status")}
+            className="topBtn"
+          >
+            Manage Statuses
+          </button>
+          <button onClick={openLineMasterModal} className="topBtn">
+            Manage Line Items
+          </button>
+          <button onClick={downloadCsvTemplate} className="topBtn">
+            Download CSV Template
+          </button>
+
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".csv"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) handleCsvUpload(file);
+            }}
+          />
+
+          <button onClick={() => fileRef.current?.click()} className="topBtn">
+            Upload CSV
+          </button>
+
+          <button
+            onClick={openAddPo}
+            className="rounded-xl bg-emerald-600 px-6 py-3 text-sm font-bold text-white shadow-sm hover:bg-emerald-700"
+          >
+            + Add PO
+          </button>
+        </div>
+      </div>
+
+      <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-4">
+        <SummaryCard title="Total POs" value={String(summary.totalOrders)} />
+        <CurrencyCard title="Total PO Value" data={summary.totalByCurrency} />
+        <CurrencyCard title="Open PO Value" data={summary.openByCurrency} />
+        <CurrencyCard
+          title="Delivered / Closed Value"
+          data={summary.deliveredByCurrency}
+        />
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mb-4 flex gap-3">
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search PO, client, project, status, line code, line item, currency..."
+            className="h-12 flex-1 rounded-xl border border-slate-300 px-4 text-sm outline-none focus:border-emerald-500"
+          />
+
+          <button
+            onClick={() => setSearch("")}
+            className="h-12 rounded-xl border border-slate-300 bg-white px-6 text-sm font-bold hover:bg-slate-50"
+          >
+            Reset
+          </button>
+        </div>
+
+        <div className="max-h-[560px] overflow-auto rounded-xl border border-slate-200">
+          <table className="w-full min-w-[980px] border-collapse text-left text-sm">
+            <thead className="sticky top-0 z-10">
+              <tr className="bg-slate-950 text-white">
+                <Th>PO No</Th>
+                <Th>PO Date</Th>
+                <Th>Client</Th>
+                <Th>Project</Th>
+                <Th>Status</Th>
+                <Th>Line Items</Th>
+                <Th>PO Amount</Th>
+                <Th align="right">Actions</Th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {filteredGroups.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={8}
+                    className="px-4 py-10 text-center text-slate-500"
+                  >
+                    No purchase orders found.
+                  </td>
+                </tr>
+              ) : (
+                filteredGroups.map((po) => (
+                  <tr key={po.po_no} className="border-t border-slate-100">
+                    <Td bold>{po.po_no}</Td>
+                    <Td>{formatDate(po.po_date)}</Td>
+                    <Td>{po.client_name ?? "-"}</Td>
+                    <Td>{po.project_name ?? "-"}</Td>
+                    <Td>
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-800">
+                        {po.status ?? "-"}
+                      </span>
+                    </Td>
+                    <Td>{po.rowCount}</Td>
+                    <Td bold>
+                      {po.currency} {formatNumber(po.total)}
+                    </Td>
+                    <Td align="right">
+                      <div className="flex justify-end gap-2">
+                        <button
+                          onClick={() => openEditPo(po)}
+                          className="editBtn"
+                        >
+                          View / Edit
+                        </button>
+                        <button
+                          onClick={() => deletePo(po.po_no)}
+                          className="deleteBtn"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </Td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {showPoModal && (
+        <Modal
+          title={editingPoNo ? "Edit Purchase Order" : "Add Purchase Order"}
+          onClose={() => setShowPoModal(false)}
+        >
+          <div className="space-y-6">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
+              <div className="mb-4 flex items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-950">
+                    PO Details
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Header details remain same for all linked line items.
+                  </p>
+                </div>
+                <div className="rounded-xl bg-white px-4 py-2 text-right shadow-sm ring-1 ring-slate-200">
+                  <div className="text-[11px] font-extrabold uppercase text-slate-500">
+                    PO Total
+                  </div>
+                  <div className="text-xl font-extrabold text-slate-950">
+                    {headerForm.currency} {formatNumber(poTotal)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <Input
+                  label="PO No"
+                  value={headerForm.po_no}
+                  onChange={(v) => setHeaderForm({ ...headerForm, po_no: v })}
+                />
+
+                <Input
+                  label="PO Date"
+                  type="date"
+                  value={headerForm.delivery_date}
+                  onChange={(v) =>
+                    setHeaderForm({ ...headerForm, delivery_date: v })
+                  }
+                />
+
+                <Select
+                  label="Client"
+                  value={headerForm.client_id}
+                  onChange={(v) =>
+                    setHeaderForm({ ...headerForm, client_id: v })
+                  }
+                  items={clients}
+                />
+
+                <Select
+                  label="Project"
+                  value={headerForm.project_id}
+                  onChange={(v) =>
+                    setHeaderForm({ ...headerForm, project_id: v })
+                  }
+                  items={projects}
+                />
+
+                <Select
+                  label="Status"
+                  value={headerForm.status_id}
+                  onChange={(v) =>
+                    setHeaderForm({ ...headerForm, status_id: v })
+                  }
+                  items={statuses}
+                />
+
+                <div>
+                  <label className="mb-1 block text-sm font-bold text-slate-700">
+                    Currency
+                  </label>
+                  <select
+                    value={headerForm.currency}
+                    onChange={(e) =>
+                      setHeaderForm({
+                        ...headerForm,
+                        currency: e.target.value,
+                      })
+                    }
+                    className="h-12 w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-emerald-500"
+                  >
+                    {currencies.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="md:col-span-3">
+                  <label className="mb-1 block text-sm font-bold text-slate-700">
+                    Notes
+                  </label>
+                  <textarea
+                    value={headerForm.notes}
+                    onChange={(e) =>
+                      setHeaderForm({ ...headerForm, notes: e.target.value })
+                    }
+                    rows={3}
+                    className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-4 flex items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-950">
+                    Line Items
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Select line code. Description, UOM and unit price auto-fill.
+                    Enter quantity only.
+                  </p>
+                </div>
+
+                <button onClick={addLineRow} className="saveBtn">
+                  + Add Row
+                </button>
+              </div>
+
+              <div className="max-h-[430px] overflow-y-auto rounded-2xl border border-slate-200">
+                <table className="w-full min-w-[980px] table-fixed text-sm">
+                  <thead className="sticky top-0 z-10 bg-slate-950 text-white">
+                    <tr>
+                      <th className="w-[160px] px-4 py-4 text-left text-xs font-semibold uppercase">
+                        Line Code
+                      </th>
+                      <th className="w-[320px] px-4 py-4 text-left text-xs font-semibold uppercase">
+                        Item Description
+                      </th>
+                      <th className="w-[130px] px-4 py-4 text-left text-xs font-semibold uppercase">
+                        UOM
+                      </th>
+                      <th className="w-[150px] px-4 py-4 text-right text-xs font-semibold uppercase">
+                        Unit Price
+                      </th>
+                      <th className="w-[110px] px-4 py-4 text-right text-xs font-semibold uppercase">
+                        Qty
+                      </th>
+                      <th className="w-[170px] px-4 py-4 text-right text-xs font-semibold uppercase">
+                        Total
+                      </th>
+                      <th className="w-[170px] px-4 py-4 text-right text-xs font-semibold uppercase">
+                        Action
+                      </th>
+                    </tr>
+                  </thead>
+
+                  <tbody className="divide-y divide-slate-100">
+                    {lineRows.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={7}
+                          className="px-4 py-10 text-center text-sm text-slate-500"
+                        >
+                          No line items added yet. Click “Add Row” to open the
+                          line item form.
+                        </td>
+                      </tr>
+                    ) : (
+                      lineRows.map((row, index) => {
+                        const rowTotal =
+                          Number(row.quantity || 0) *
+                          Number(row.unit_price || 0);
+
+                        return (
+                          <tr key={index} className="hover:bg-slate-50">
+                            <td className="whitespace-nowrap px-4 py-4 font-bold text-slate-950">
+                              {row.line_code}
+                            </td>
+                            <td className="px-4 py-4 text-slate-700">
+                              <div className="line-clamp-2 max-w-[300px]">
+                                {row.line_item}
+                              </div>
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-4 text-slate-700">
+                              {row.unit_of_measurement || "-"}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-4 text-right text-slate-700">
+                              {formatNumber(Number(row.unit_price || 0))}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-4 text-right text-slate-700">
+                              {formatNumber(Number(row.quantity || 0))}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-4 text-right font-extrabold text-slate-950">
+                              {headerForm.currency} {formatNumber(rowTotal)}
+                            </td>
+                            <td className="whitespace-nowrap px-4 py-4 text-right">
+                              <div className="flex justify-end gap-2">
+                                <button
+                                  onClick={() => openEditLineRow(index)}
+                                  className="editBtn"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  onClick={() => removeLineRow(index)}
+                                  className="rounded-lg bg-red-50 px-3 py-2 text-xs font-extrabold text-red-600 hover:bg-red-100"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {lineItemModalOpen && (
+                <LineItemFormModal
+                  currency={headerForm.currency}
+                  items={lineCatalog}
+                  draft={lineDraft}
+                  search={lineSearch}
+                  onSearchChange={setLineSearch}
+                  onDraftChange={setLineDraft}
+                  onSelectItem={selectLineCatalogItem}
+                  onClose={closeLineItemModal}
+                  onSave={saveLineItemToPo}
+                  formatNumber={formatNumber}
+                  title={
+                    editingLineIndex === null
+                      ? "Add PO Line Item"
+                      : "Edit PO Line Item"
+                  }
+                />
+              )}
+            </div>
+
+            <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4">
+              <div>
+                <p className="text-xs font-extrabold uppercase text-slate-500">
+                  Final PO Amount
+                </p>
+                <p className="text-2xl font-extrabold text-slate-950">
+                  {headerForm.currency} {formatNumber(poTotal)}
+                </p>
+              </div>
+
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setShowPoModal(false)}
+                  className="cancelBtn"
+                >
+                  Cancel
+                </button>
+                <button onClick={savePo} className="saveBtn">
+                  Save PO
+                </button>
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {showLineMasterModal && (
+        <Modal
+          title="Manage PO Line Items"
+          onClose={() => setShowLineMasterModal(false)}
+        >
+          <div className="space-y-5">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-950">
+                    Line Item Master
+                  </h3>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Maintain reusable line code, item description, UOM and unit
+                    price. PO line-item dropdowns are populated from this table.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap gap-3">
+                  {selectedMasterLineCodes.length > 0 && (
+                    <button
+                      onClick={bulkDeleteMasterLineItems}
+                      className="deleteBtn"
+                    >
+                      Bulk Delete ({selectedMasterLineCodes.length})
+                    </button>
+                  )}
+                  <button
+                    onClick={downloadLineItemsTemplate}
+                    className="topBtn"
+                  >
+                    Download Template
+                  </button>
+                  <input
+                    ref={lineMasterFileRef}
+                    type="file"
+                    accept=".csv"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleLineItemsCsvUpload(file);
+                    }}
+                  />
+                  <button
+                    onClick={() => lineMasterFileRef.current?.click()}
+                    className="topBtn"
+                  >
+                    Upload CSV
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                <Input
+                  label="Line Code"
+                  value={lineMasterForm.line_code}
+                  onChange={(v) =>
+                    setLineMasterForm({ ...lineMasterForm, line_code: v })
+                  }
+                />
+                <Input
+                  label="Item Description"
+                  value={lineMasterForm.line_item}
+                  onChange={(v) =>
+                    setLineMasterForm({ ...lineMasterForm, line_item: v })
+                  }
+                />
+                <Input
+                  label="UOM"
+                  value={lineMasterForm.unit_of_measurement}
+                  onChange={(v) =>
+                    setLineMasterForm({
+                      ...lineMasterForm,
+                      unit_of_measurement: v,
+                    })
+                  }
+                />
+                <Input
+                  label="Unit Price"
+                  type="number"
+                  value={lineMasterForm.unit_price}
+                  onChange={(v) =>
+                    setLineMasterForm({ ...lineMasterForm, unit_price: v })
+                  }
+                />
+              </div>
+
+              <div className="mt-4 flex justify-end gap-3">
+                {editingMasterLineCode && (
+                  <button onClick={resetLineMasterForm} className="cancelBtn">
+                    Cancel Edit
+                  </button>
+                )}
+                <button onClick={saveMasterLineItem} className="saveBtn">
+                  {editingMasterLineCode
+                    ? "Update Line Item"
+                    : "+ Add Line Item"}
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-4 flex gap-3">
+                <input
+                  value={lineMasterSearch}
+                  onChange={(e) => setLineMasterSearch(e.target.value)}
+                  placeholder="Search line code, item description, UOM or price..."
+                  className="h-12 flex-1 rounded-xl border border-slate-300 px-4 text-sm outline-none focus:border-emerald-500"
+                />
+                <button
+                  onClick={() => setLineMasterSearch("")}
+                  className="cancelBtn"
+                >
+                  Reset
+                </button>
+              </div>
+
+              <div className="max-h-[520px] overflow-auto rounded-xl border border-slate-200">
+                <table className="w-full min-w-[900px] text-left text-sm">
+                  <thead className="sticky top-0 z-10 bg-slate-950 text-white">
+                    <tr>
+                      <th className="w-[50px] px-4 py-4">
+                        <input
+                          type="checkbox"
+                          checked={allFilteredMasterSelected}
+                          onChange={toggleAllFilteredMasterLines}
+                        />
+                      </th>
+                      <Th>Line Code</Th>
+                      <Th>Item Description</Th>
+                      <Th>UOM</Th>
+                      <Th align="right">Unit Price</Th>
+                      <Th align="right">Actions</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredMasterLineItems.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={6}
+                          className="px-4 py-10 text-center text-sm text-slate-500"
+                        >
+                          No line items found.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredMasterLineItems.map((item) => (
+                        <tr
+                          key={item.line_code}
+                          className="border-t border-slate-100 hover:bg-slate-50"
+                        >
+                          <td className="px-4 py-4">
+                            <input
+                              type="checkbox"
+                              checked={selectedMasterLineCodes.includes(
+                                item.line_code,
+                              )}
+                              onChange={() =>
+                                toggleMasterLineSelection(item.line_code)
+                              }
+                            />
+                          </td>
+                          <Td bold>{item.line_code}</Td>
+                          <Td>{item.line_item}</Td>
+                          <Td>{item.unit_of_measurement}</Td>
+                          <Td align="right">
+                            {formatNumber(Number(item.unit_price || 0))}
+                          </Td>
+                          <Td align="right">
+                            <div className="flex justify-end gap-2">
+                              <button
+                                onClick={() => editMasterLineItem(item)}
+                                className="editBtn"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                onClick={() =>
+                                  deleteMasterLineItem(item.line_code)
+                                }
+                                className="deleteBtn"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </Td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {dropdownModal && (
+        <Modal
+          title={getDropdownTitle()}
+          onClose={() => setDropdownModal(null)}
+        >
+          <div className="mb-4 flex gap-3">
+            <input
+              value={dropdownName}
+              onChange={(e) => setDropdownName(e.target.value)}
+              placeholder="Enter name..."
+              className="h-12 flex-1 rounded-xl border border-slate-300 px-4 text-sm outline-none focus:border-emerald-500"
+            />
+
+            <button onClick={saveDropdownItem} className="saveBtn">
+              {editingDropdownId ? "Update" : "Add"}
+            </button>
+          </div>
+
+          <div className="overflow-hidden rounded-xl border border-slate-200">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="bg-slate-950 text-white">
+                  <Th>Name</Th>
+                  <Th>Actions</Th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {getDropdownItems().map((item) => (
+                  <tr key={item.id} className="border-t border-slate-100">
+                    <Td bold>{item.name}</Td>
+                    <Td>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => {
+                            setDropdownName(item.name);
+                            setEditingDropdownId(item.id);
+                          }}
+                          className="editBtn"
+                        >
+                          Edit
+                        </button>
+
+                        <button
+                          onClick={() => deleteDropdownItem(item.id)}
+                          className="deleteBtn"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </Td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Modal>
+      )}
+
+      <style jsx>{`
+        .topBtn {
+          border-radius: 0.75rem;
+          border: 1px solid rgb(203 213 225);
+          background: white;
+          padding: 0.75rem 1.5rem;
+          font-size: 0.875rem;
+          font-weight: 800;
+          box-shadow: 0 1px 3px rgb(0 0 0 / 0.1);
+        }
+        .topBtn:hover {
+          background: rgb(248 250 252);
+        }
+        .editBtn {
+          border-radius: 0.5rem;
+          border: 1px solid rgb(203 213 225);
+          padding: 0.5rem 0.75rem;
+          font-size: 0.75rem;
+          font-weight: 800;
+        }
+        .editBtn:hover {
+          background: rgb(248 250 252);
+        }
+        .deleteBtn {
+          border-radius: 0.5rem;
+          background: rgb(220 38 38);
+          padding: 0.5rem 0.75rem;
+          font-size: 0.75rem;
+          font-weight: 800;
+          color: white;
+        }
+        .deleteBtn:hover {
+          background: rgb(185 28 28);
+        }
+        .cancelBtn {
+          border-radius: 0.75rem;
+          border: 1px solid rgb(203 213 225);
+          background: white;
+          padding: 0.75rem 1.25rem;
+          font-size: 0.875rem;
+          font-weight: 800;
+        }
+        .cancelBtn:hover {
+          background: rgb(248 250 252);
+        }
+        .saveBtn {
+          border-radius: 0.75rem;
+          background: rgb(5 150 105);
+          padding: 0.75rem 1.25rem;
+          font-size: 0.875rem;
+          font-weight: 800;
+          color: white;
+        }
+        .saveBtn:hover {
+          background: rgb(4 120 87);
+        }
+      `}</style>
+    </div>
+  );
+}
+
+function SummaryCard({ title, value }: { title: string; value: string }) {
+  return (
+    <div className="min-h-[150px] rounded-2xl border border-slate-200 bg-white p-7 shadow-sm">
+      <div className="text-sm font-bold text-slate-600">{title}</div>
+      <div className="mt-6 text-3xl font-extrabold text-slate-950">{value}</div>
+    </div>
+  );
+}
+
+function CurrencyCard({
+  title,
+  data,
+}: {
+  title: string;
+  data: Record<string, number>;
+}) {
+  const rows = Object.entries(data).filter(([, value]) => value > 0);
+
+  return (
+    <div className="min-h-[150px] rounded-2xl border border-slate-200 bg-white p-7 shadow-sm">
+      <div className="mb-5 text-sm font-bold text-slate-600">{title}</div>
+
+      {rows.length === 0 ? (
+        <div className="text-3xl font-extrabold text-slate-950">0</div>
+      ) : (
+        <div className="space-y-3">
+          {rows.map(([currency, value]) => (
+            <div
+              key={currency}
+              className="flex items-center justify-between border-b border-slate-100 pb-2 last:border-0"
+            >
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-extrabold text-slate-700">
+                {currency}
+              </span>
+              <span className="text-2xl font-extrabold text-slate-950">
+                {Number(value).toLocaleString()}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Th({
+  children,
+  align = "left",
+}: {
+  children: React.ReactNode;
+  align?: "left" | "right";
+}) {
+  return (
+    <th
+      className={`px-4 py-4 text-xs font-extrabold uppercase ${
+        align === "right" ? "text-right" : "text-left"
+      }`}
+    >
+      {children}
+    </th>
+  );
+}
+
+function Td({
+  children,
+  bold,
+  align = "left",
+}: {
+  children: React.ReactNode;
+  bold?: boolean;
+  align?: "left" | "right";
+}) {
+  return (
+    <td
+      className={`whitespace-nowrap px-4 py-4 align-middle text-[13px] leading-5 ${
+        align === "right" ? "text-right" : "text-left"
+      } ${bold ? "font-bold text-slate-950" : "font-normal text-slate-900"}`}
+    >
+      {children}
+    </td>
+  );
+}
+
+function Modal({
+  title,
+  children,
+  onClose,
+}: {
+  title: string;
+  children: React.ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4">
+      <div className="max-h-[90vh] w-full max-w-7xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+          <div>
+            <h2 className="text-xl font-extrabold text-slate-950">{title}</h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Microsoft Access style header form with linked sub-form line
+              items.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold hover:bg-slate-50"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="max-h-[calc(90vh-81px)] overflow-y-auto p-6">
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Input({
+  label,
+  value,
+  onChange,
+  type = "text",
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  type?: string;
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-sm font-bold text-slate-700">
+        {label}
+      </label>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-12 w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+      />
+    </div>
+  );
+}
+
+function LineItemFormModal({
+  title,
+  currency,
+  items,
+  draft,
+  search,
+  onSearchChange,
+  onDraftChange,
+  onSelectItem,
+  onClose,
+  onSave,
+  formatNumber,
+}: {
+  title: string;
+  currency: string;
+  items: LineCatalogItem[];
+  draft: PoLineForm;
+  search: string;
+  onSearchChange: (value: string) => void;
+  onDraftChange: (value: PoLineForm) => void;
+  onSelectItem: (item: LineCatalogItem) => void;
+  onClose: () => void;
+  onSave: () => void;
+  formatNumber: (value: number) => string;
+}) {
+  const filteredItems = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return items;
+
+    return items.filter((item) =>
+      `${item.line_code} ${item.line_item} ${item.unit_of_measurement}`
+        .toLowerCase()
+        .includes(q),
+    );
+  }, [items, search]);
+
+  const rowTotal = Number(draft.quantity || 0) * Number(draft.unit_price || 0);
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/50 px-4">
+      <div className="max-h-[90vh] w-full max-w-5xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+          <div>
+            <h3 className="text-xl font-extrabold text-slate-950">{title}</h3>
+            <p className="mt-1 text-xs text-slate-500">
+              Search and select line code. Description, UOM and unit price
+              auto-fill. Enter quantity only.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold hover:bg-slate-50"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="grid max-h-[calc(90vh-81px)] grid-cols-1 gap-5 overflow-y-auto p-6 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+            <label className="mb-2 block text-sm font-bold text-slate-700">
+              Search Line Code / Item
+            </label>
+            <input
+              value={search}
+              onChange={(e) => onSearchChange(e.target.value)}
+              placeholder="Type line code, description or UOM..."
+              autoFocus
+              className="h-12 w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+            />
+
+            <div className="mt-4 max-h-[460px] overflow-y-auto rounded-xl border border-slate-200 bg-white">
+              {filteredItems.length === 0 ? (
+                <div className="px-4 py-8 text-center text-sm text-slate-500">
+                  No matching line item found.
+                </div>
+              ) : (
+                filteredItems.map((item) => {
+                  const selected = item.line_code === draft.line_code;
+                  return (
+                    <button
+                      key={item.line_code}
+                      type="button"
+                      onClick={() => onSelectItem(item)}
+                      className={`flex w-full items-start justify-between gap-4 border-b border-slate-100 px-4 py-3 text-left hover:bg-emerald-50 last:border-b-0 ${
+                        selected
+                          ? "bg-emerald-50 ring-1 ring-inset ring-emerald-200"
+                          : ""
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="font-extrabold text-slate-950">
+                          {item.line_code}
+                        </div>
+                        <div className="mt-1 line-clamp-2 text-sm text-slate-600">
+                          {item.line_item}
+                        </div>
+                      </div>
+                      <div className="shrink-0 text-right text-xs text-slate-500">
+                        <div className="font-bold text-slate-700">
+                          {item.unit_of_measurement || "-"}
+                        </div>
+                        <div className="mt-1 font-extrabold text-slate-950">
+                          {Number(item.unit_price || 0).toLocaleString()}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <ReadOnlyBox label="Line Code" value={draft.line_code} />
+              <ReadOnlyBox label="UOM" value={draft.unit_of_measurement} />
+              <ReadOnlyBox
+                label="Unit Price"
+                value={formatNumber(Number(draft.unit_price || 0))}
+                align="right"
+              />
+              <div>
+                <label className="mb-1 block text-sm font-bold text-slate-700">
+                  Quantity
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={draft.quantity}
+                  onChange={(e) =>
+                    onDraftChange({ ...draft, quantity: e.target.value })
+                  }
+                  className="h-12 w-full rounded-xl border border-slate-300 bg-white px-4 text-right text-sm outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-sm font-bold text-slate-700">
+                Item Description
+              </label>
+              <textarea
+                value={draft.line_item}
+                readOnly
+                rows={4}
+                className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none"
+              />
+            </div>
+
+            <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4">
+              <div>
+                <p className="text-xs font-extrabold uppercase text-slate-500">
+                  Row Total
+                </p>
+                <p className="text-2xl font-extrabold text-slate-950">
+                  {currency} {formatNumber(rowTotal)}
+                </p>
+              </div>
+              <div className="flex gap-3">
+                <button onClick={onClose} className="cancelBtn">
+                  Cancel
+                </button>
+                <button onClick={onSave} className="saveBtn">
+                  Save Line
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReadOnlyBox({
+  label,
+  value,
+  align = "left",
+}: {
+  label: string;
+  value: string;
+  align?: "left" | "right";
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-sm font-bold text-slate-700">
+        {label}
+      </label>
+      <input
+        value={value || ""}
+        readOnly
+        className={`h-12 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm text-slate-700 outline-none ${
+          align === "right" ? "text-right" : "text-left"
+        }`}
+      />
+    </div>
+  );
+}
+
+function Select({
+  label,
+  value,
+  onChange,
+  items,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  items: DropdownItem[];
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-sm font-bold text-slate-700">
+        {label}
+      </label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-12 w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+      >
+        <option value="">Select</option>
+        {items.map((item) => (
+          <option key={item.id} value={item.id}>
+            {item.name}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+
+
+
+
+======================================================================
+FILE: app/(app)/modules/kpi/page.tsx
+======================================================================
+
+
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
+type KPI = {
+  id: string;
+  title: string;
+  category: string | null;
+  target_value: number;
+  current_value: number;
+  unit: string | null;
+  status: string;
+  due_date: string | null;
+  detail: string | null;
+  created_at: string;
+};
+
+type KpiCategory = {
+  id: number;
+  name: string;
+};
+
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+const FALLBACK_CATEGORIES = [
+  "Sales",
+  "Marketing",
+  "Finance",
+  "Operations",
+  "Customer Support",
+  "HR",
+  "Productivity",
+  "Growth",
+  "Other",
+];
+
+const KPI_UNITS = [
+  "PKR",
+  "USD",
+  "EUR",
+  "GBP",
+  "AED",
+  "SAR",
+  "CAD",
+  "JPY",
+  "SGD",
+  "AUD",
+  "OMR",
+  "%",
+  "Count",
+  "Users",
+  "Hours",
+  "Days",
+  "Tasks",
+];
+
+export default function KPIPage() {
+  const [sortKey, setSortKey] = useState<keyof KPI>("created_at");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [kpis, setKpis] = useState<KPI[]>([]);
+  const [categories, setCategories] = useState<KpiCategory[]>([]);
+  const [categoryModalOpen, setCategoryModalOpen] = useState(false);
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [bulkUploading, setBulkUploading] = useState(false);
+  const [search, setSearch] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [selectedKpi, setSelectedKpi] = useState<KPI | null>(null);
+
+  const [form, setForm] = useState({
+    title: "",
+    category: "",
+    target_value: "",
+    current_value: "",
+    unit: "Rs",
+    status: "active",
+    due_date: "",
+    detail: "",
+  });
+
+  async function loadCategories() {
+    try {
+      const res = await fetch("/api/kpi/categories", { cache: "no-store" });
+      const data = await res.json();
+
+      if (data.success && Array.isArray(data.categories)) {
+        setCategories(data.categories);
+      }
+    } catch (error) {
+      console.error("Failed to load KPI categories:", error);
+    }
+  }
+
+  async function seedFallbackCategories() {
+    for (const name of FALLBACK_CATEGORIES) {
+      await fetch("/api/kpi/categories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      }).catch(() => null);
+    }
+
+    await loadCategories();
+  }
+
+  function handleSort(key: keyof KPI) {
+    if (sortKey === key) {
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDirection("asc");
+    }
+  }
+
+  async function fetchKpis() {
+    setLoading(true);
+    try {
+      const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/kpis?select=*&order=created_at.desc`,
+        {
+          headers: {
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          },
+        },
+      );
+
+      const data = await res.json();
+      setKpis(Array.isArray(data) ? data : []);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    fetchKpis();
+    loadCategories();
+  }, []);
+
+  function updateForm(key: string, value: string) {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function resetForm() {
+    setEditingId(null);
+    setForm({
+      title: "",
+      category: "",
+      target_value: "",
+      current_value: "",
+      unit: "Rs",
+      status: "active",
+      due_date: "",
+      detail: "",
+    });
+  }
+
+  async function saveKpi(e: React.FormEvent) {
+    e.preventDefault();
+
+    if (!form.title.trim()) return alert("Please enter KPI title");
+    if (!form.category) return alert("Please select KPI category");
+
+    setSaving(true);
+
+    const payload = {
+      title: form.title.trim(),
+      category: form.category,
+      target_value: Number(form.target_value || 0),
+      current_value: Number(form.current_value || 0),
+      unit: form.unit,
+      status: form.status,
+      due_date: form.due_date || null,
+      detail: form.detail.trim() || null,
+    };
+
+    try {
+      const url = editingId
+        ? `${SUPABASE_URL}/rest/v1/kpis?id=eq.${editingId}`
+        : `${SUPABASE_URL}/rest/v1/kpis`;
+
+      await fetch(url, {
+        method: editingId ? "PATCH" : "POST",
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          "Content-Type": "application/json",
+          Prefer: "return=minimal",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      resetForm();
+      await fetchKpis();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function startEdit(item: KPI) {
+    setEditingId(item.id);
+    setForm({
+      title: item.title || "",
+      category: item.category || "",
+      target_value: String(item.target_value ?? ""),
+      current_value: String(item.current_value ?? ""),
+      unit: item.unit || "Rs",
+      status: item.status || "active",
+      due_date: item.due_date || "",
+      detail: item.detail || "",
+    });
+  }
+
+  async function deleteKpi(id: string) {
+    if (!confirm("Are you sure you want to delete this KPI?")) return;
+
+    await fetch(`${SUPABASE_URL}/rest/v1/kpis?id=eq.${id}`, {
+      method: "DELETE",
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+    });
+
+    await fetchKpis();
+  }
+
+  function downloadKpiTemplate() {
+    const csv = [
+      "title,category,target_value,current_value,unit,status,due_date,detail",
+      "Monthly Revenue,Sales,100000,25000,Rs,active,2026-04-30,Track monthly revenue against target",
+      "Customer Acquisition,Marketing,500,320,Users,active,2026-05-15,Track new customer acquisition",
+      "Website Conversion Rate,Growth,5,2.5,%,paused,2026-06-01,Track website lead conversion rate",
+    ].join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "kpi-upload-template.csv";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function parseCsv(text: string) {
+    const lines = text.trim().split(/\r?\n/);
+    const headers = lines[0].split(",").map((h) => h.trim());
+
+    return lines.slice(1).map((line) => {
+      const values = line.split(",").map((v) => v.trim());
+      return headers.reduce<Record<string, string>>((obj, header, index) => {
+        obj[header] = values[index] || "";
+        return obj;
+      }, {});
+    });
+  }
+
+  async function uploadKpiCsv(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setBulkUploading(true);
+
+    try {
+      const text = await file.text();
+      const rows = parseCsv(text);
+
+      const payload = rows
+        .filter((row) => row.title)
+        .map((row) => ({
+          title: row.title,
+          category: row.category || "Other",
+          target_value: Number(row.target_value || 0),
+          current_value: Number(row.current_value || 0),
+          unit: row.unit || "Rs",
+          status: row.status || "active",
+          due_date: row.due_date || null,
+          detail: row.detail || null,
+        }));
+
+      if (!payload.length) return alert("No valid KPI records found.");
+
+      await fetch(`${SUPABASE_URL}/rest/v1/kpis`, {
+        method: "POST",
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          "Content-Type": "application/json",
+          Prefer: "return=minimal",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      await fetchKpis();
+      alert(`${payload.length} KPI records uploaded successfully.`);
+    } finally {
+      setBulkUploading(false);
+      e.target.value = "";
+    }
+  }
+
+  const dropdownCategories = useMemo(() => {
+    const dbCategories = categories.map((x) => x.name);
+    const existingKpiCategories = kpis
+      .map((x) => x.category)
+      .filter(Boolean) as string[];
+
+    return Array.from(
+      new Set([
+        ...dbCategories,
+        ...existingKpiCategories,
+        ...FALLBACK_CATEGORIES,
+      ]),
+    ).sort((a, b) => a.localeCompare(b));
+  }, [categories, kpis]);
+
+  const filteredKpis = useMemo(() => {
+    const filtered = kpis.filter((item) => {
+      const searchText = `${item.title} ${item.category || ""} ${
+        item.status || ""
+      } ${item.detail || ""}`.toLowerCase();
+
+      return searchText.includes(search.toLowerCase());
+    });
+
+    return [...filtered].sort((a, b) => {
+      const aValue = a[sortKey];
+      const bValue = b[sortKey];
+
+      if (sortKey === "current_value") {
+        const aProgress =
+          Number(a.target_value) > 0
+            ? (Number(a.current_value) / Number(a.target_value)) * 100
+            : 0;
+
+        const bProgress =
+          Number(b.target_value) > 0
+            ? (Number(b.current_value) / Number(b.target_value)) * 100
+            : 0;
+
+        return sortDirection === "asc"
+          ? aProgress - bProgress
+          : bProgress - aProgress;
+      }
+
+      if (sortKey === "target_value") {
+        return sortDirection === "asc"
+          ? Number(a.target_value) - Number(b.target_value)
+          : Number(b.target_value) - Number(a.target_value);
+      }
+
+      return sortDirection === "asc"
+        ? String(aValue || "").localeCompare(String(bValue || ""))
+        : String(bValue || "").localeCompare(String(aValue || ""));
+    });
+  }, [kpis, search, sortKey, sortDirection]);
+
+  const stats = useMemo(() => {
+    const total = kpis.length;
+    const active = kpis.filter((x) => x.status === "active").length;
+    const completed = kpis.filter(
+      (x) =>
+        Number(x.target_value) > 0 &&
+        Number(x.current_value) >= Number(x.target_value),
+    ).length;
+
+    const avgProgress =
+      total === 0
+        ? 0
+        : Math.round(
+            kpis.reduce((sum, item) => {
+              const target = Number(item.target_value || 0);
+              const current = Number(item.current_value || 0);
+              const progress = target > 0 ? (current / target) * 100 : 0;
+              return sum + Math.min(progress, 100);
+            }, 0) / total,
+          );
+
+    return { total, active, completed, avgProgress };
+  }, [kpis]);
+
+  return (
+    <div className="min-h-screen bg-[#eef3f8] p-6">
+      <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <p className="text-sm font-semibold text-green-600">KPI Tracking</p>
+
+        <div className="mt-2 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-950">
+              KPI Management Dashboard
+            </h1>
+            <p className="mt-2 text-sm text-slate-600">
+              Create, upload, monitor, and manage company KPIs.
+            </p>
+          </div>
+
+          <button
+            onClick={fetchKpis}
+            className="rounded-xl bg-green-600 px-5 py-3 text-sm font-bold text-white hover:bg-green-700"
+          >
+            Refresh Data
+          </button>
+        </div>
+      </div>
+
+      <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-4">
+        <StatCard title="Total KPIs" value={stats.total} />
+        <StatCard title="Active KPIs" value={stats.active} />
+        <StatCard title="Completed" value={stats.completed} />
+        <StatCard title="Avg Progress" value={`${stats.avgProgress}%`} />
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[420px_1fr]">
+        <form
+          onSubmit={saveKpi}
+          className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
+        >
+          <h2 className="text-xl font-bold text-slate-950">
+            {editingId ? "Edit KPI" : "Add New KPI"}
+          </h2>
+          <p className="mt-1 text-sm text-slate-500">
+            Add KPI target, current value, detail, and due date.
+          </p>
+
+          <div className="mt-5 space-y-4">
+            <Input
+              placeholder="KPI title"
+              value={form.title}
+              onChange={(v) => updateForm("title", v)}
+            />
+
+            <div className="flex gap-2">
+              <select
+                value={form.category}
+                onChange={(e) => updateForm("category", e.target.value)}
+                className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-green-500"
+              >
+                <option value="">Select Category</option>
+                {dropdownCategories.map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                type="button"
+                onClick={() => setCategoryModalOpen(true)}
+                className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white hover:bg-slate-800"
+              >
+                Manage
+              </button>
+            </div>
+
+            {categories.length === 0 && (
+              <button
+                type="button"
+                onClick={seedFallbackCategories}
+                className="w-full rounded-xl border border-dashed border-green-300 bg-green-50 px-4 py-3 text-sm font-bold text-green-700 hover:bg-green-100"
+              >
+                Create Default Categories
+              </button>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                type="number"
+                placeholder="Target"
+                value={form.target_value}
+                onChange={(v) => updateForm("target_value", v)}
+              />
+
+              <Input
+                type="number"
+                placeholder="Current"
+                value={form.current_value}
+                onChange={(v) => updateForm("current_value", v)}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <select
+                value={form.unit}
+                onChange={(e) => updateForm("unit", e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-green-500"
+              >
+                {KPI_UNITS.map((unit) => (
+                  <option key={unit} value={unit}>
+                    {unit}
+                  </option>
+                ))}
+              </select>
+
+              <Input
+                type="date"
+                value={form.due_date}
+                onChange={(v) => updateForm("due_date", v)}
+              />
+            </div>
+
+            <select
+              value={form.status}
+              onChange={(e) => updateForm("status", e.target.value)}
+              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-green-500"
+            >
+              <option value="active">Active</option>
+              <option value="paused">Paused</option>
+              <option value="completed">Completed</option>
+            </select>
+
+            <textarea
+              value={form.detail}
+              onChange={(e) => updateForm("detail", e.target.value)}
+              placeholder="KPI detail, notes, definition, or business explanation"
+              rows={4}
+              className="w-full resize-none rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-green-500"
+            />
+
+            <button
+              type="submit"
+              disabled={saving}
+              className="w-full rounded-xl bg-green-600 px-4 py-3 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-60"
+            >
+              {saving ? "Saving..." : editingId ? "Update KPI" : "Add KPI"}
+            </button>
+
+            {editingId && (
+              <button
+                type="button"
+                onClick={resetForm}
+                className="w-full rounded-xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200"
+              >
+                Cancel Edit
+              </button>
+            )}
+          </div>
+        </form>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-5 flex flex-col gap-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-slate-950">KPI List</h2>
+                <p className="text-sm text-slate-500">
+                  Click any KPI row to view full details.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <button
+                  type="button"
+                  onClick={downloadKpiTemplate}
+                  className="rounded-xl bg-slate-100 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-200"
+                >
+                  Download CSV Template
+                </button>
+
+                <label className="cursor-pointer rounded-xl bg-green-600 px-4 py-2 text-center text-sm font-bold text-white hover:bg-green-700">
+                  {bulkUploading ? "Uploading..." : "Upload CSV"}
+                  <input
+                    type="file"
+                    accept=".csv"
+                    onChange={uploadKpiCsv}
+                    disabled={bulkUploading}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search KPI..."
+                className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm outline-none focus:border-green-500 sm:w-80"
+              />
+            </div>
+          </div>
+
+          {loading ? (
+            <div className="rounded-xl bg-slate-50 p-10 text-center text-sm text-slate-500">
+              Loading KPIs...
+            </div>
+          ) : filteredKpis.length === 0 ? (
+            <div className="rounded-xl bg-slate-50 p-10 text-center text-sm text-slate-500">
+              No KPIs found.
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-xl border border-slate-200">
+              <table className="w-full table-fixed text-left text-sm">
+                <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                  <tr>
+                    <th className="w-[40%] px-4 py-3">
+                      <SortButton
+                        label="KPI"
+                        column="title"
+                        sortKey={sortKey}
+                        sortDirection={sortDirection}
+                        onSort={handleSort}
+                      />
+                    </th>
+                    <th className="w-[18%] px-4 py-3">
+                      <SortButton
+                        label="Progress"
+                        column="current_value"
+                        sortKey={sortKey}
+                        sortDirection={sortDirection}
+                        onSort={handleSort}
+                      />
+                    </th>
+                    <th className="w-[14%] px-4 py-3">
+                      <SortButton
+                        label="Status"
+                        column="status"
+                        sortKey={sortKey}
+                        sortDirection={sortDirection}
+                        onSort={handleSort}
+                      />
+                    </th>
+                    <th className="w-[14%] px-4 py-3">
+                      <SortButton
+                        label="Due Date"
+                        column="due_date"
+                        sortKey={sortKey}
+                        sortDirection={sortDirection}
+                        onSort={handleSort}
+                      />
+                    </th>
+                    <th className="w-[14%] px-4 py-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+              </table>
+
+              <div className="max-h-[680px] overflow-y-auto">
+                <table className="w-full table-fixed text-left text-sm">
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredKpis.map((item) => {
+                      const target = Number(item.target_value || 0);
+                      const current = Number(item.current_value || 0);
+                      const progress =
+                        target > 0
+                          ? Math.min(Math.round((current / target) * 100), 100)
+                          : 0;
+
+                      return (
+                        <tr
+                          key={item.id}
+                          onClick={() => setSelectedKpi(item)}
+                          className="cursor-pointer bg-white hover:bg-slate-50"
+                        >
+                          <td className="w-[40%] px-4 py-4">
+                            <div className="font-bold text-slate-950">
+                              {item.title}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              {item.category || "General"} · Current:{" "}
+                              {formatKpiValue(current, item.unit)} / Target:{" "}
+                              {formatKpiValue(target, item.unit)}
+                            </div>
+                          </td>
+
+                          <td className="w-[18%] px-4 py-4">
+                            <div className="mb-1 text-xs font-semibold text-slate-600">
+                              {progress}%
+                            </div>
+                            <div className="h-2 w-36 rounded-full bg-slate-100">
+                              <div
+                                className="h-2 rounded-full bg-green-600"
+                                style={{ width: `${progress}%` }}
+                              />
+                            </div>
+                          </td>
+
+                          <td className="w-[14%] px-4 py-4">
+                            <StatusBadge status={item.status} />
+                          </td>
+
+                          <td className="w-[14%] px-4 py-4 text-slate-600">
+                            {item.due_date || "-"}
+                          </td>
+
+                          <td className="w-[14%] px-4 py-4">
+                            <div className="flex justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  startEdit(item);
+                                }}
+                                className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-200"
+                              >
+                                Edit
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  deleteKpi(item.id);
+                                }}
+                                className="rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-600 hover:bg-red-100"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <CategoryManagerModal
+        open={categoryModalOpen}
+        categories={categories}
+        onClose={() => setCategoryModalOpen(false)}
+        onRefresh={loadCategories}
+      />
+
+      {selectedKpi && (
+        <KpiDetailsModal
+          kpi={selectedKpi}
+          onClose={() => setSelectedKpi(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function CategoryManagerModal({
+  open,
+  categories,
+  onClose,
+  onRefresh,
+}: {
+  open: boolean;
+  categories: KpiCategory[];
+  onClose: () => void;
+  onRefresh: () => Promise<void>;
+}) {
+  const [newName, setNewName] = useState("");
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  if (!open) return null;
+
+  async function addCategory() {
+    const name = newName.trim();
+    if (!name) return alert("Please enter category name");
+
+    setLoading(true);
+    try {
+      const res = await fetch("/api/kpi/categories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || "Failed to add category");
+        return;
+      }
+
+      setNewName("");
+      await onRefresh();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function updateCategory(id: number) {
+    const name = editingName.trim();
+    if (!name) return alert("Please enter category name");
+
+    setLoading(true);
+    try {
+      const res = await fetch("/api/kpi/categories", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, name }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || "Failed to update category");
+        return;
+      }
+
+      setEditingId(null);
+      setEditingName("");
+      await onRefresh();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function deleteCategory(id: number) {
+    if (!confirm("Delete this category?")) return;
+
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/kpi/categories?id=${id}`, {
+        method: "DELETE",
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || "Failed to delete category");
+        return;
+      }
+
+      await onRefresh();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl">
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-bold text-slate-950">
+              Manage KPI Categories
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Add, rename, or delete KPI categories.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl bg-slate-100 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-200"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="mb-5 flex gap-2">
+          <input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") addCategory();
+            }}
+            placeholder="New category name"
+            className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-green-500"
+          />
+
+          <button
+            type="button"
+            onClick={addCategory}
+            disabled={loading}
+            className="rounded-xl bg-green-600 px-5 py-3 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-60"
+          >
+            Add
+          </button>
+        </div>
+
+        <div className="max-h-80 overflow-y-auto rounded-xl border border-slate-200">
+          {categories.length === 0 ? (
+            <div className="p-6 text-center text-sm text-slate-500">
+              No categories found.
+            </div>
+          ) : (
+            categories.map((cat) => (
+              <div
+                key={cat.id}
+                className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 last:border-b-0"
+              >
+                {editingId === cat.id ? (
+                  <input
+                    value={editingName}
+                    onChange={(e) => setEditingName(e.target.value)}
+                    className="min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-green-500"
+                  />
+                ) : (
+                  <span className="min-w-0 flex-1 text-sm font-semibold text-slate-800">
+                    {cat.name}
+                  </span>
+                )}
+
+                <div className="flex shrink-0 gap-2">
+                  {editingId === cat.id ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => updateCategory(cat.id)}
+                        disabled={loading}
+                        className="rounded-lg bg-green-50 px-3 py-2 text-xs font-bold text-green-700 hover:bg-green-100 disabled:opacity-60"
+                      >
+                        Save
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingId(null);
+                          setEditingName("");
+                        }}
+                        className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-200"
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingId(cat.id);
+                        setEditingName(cat.name);
+                      }}
+                      className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-200"
+                    >
+                      Edit
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => deleteCategory(cat.id)}
+                    disabled={loading}
+                    className="rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-600 hover:bg-red-100 disabled:opacity-60"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatCard({ title, value }: { title: string; value: string | number }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <p className="text-sm text-slate-500">{title}</p>
+      <h2 className="mt-2 text-3xl font-bold text-slate-950">{value}</h2>
+    </div>
+  );
+}
+
+function SortButton({
+  label,
+  column,
+  sortKey,
+  sortDirection,
+  onSort,
+}: {
+  label: string;
+  column: keyof KPI;
+  sortKey: keyof KPI;
+  sortDirection: "asc" | "desc";
+  onSort: (key: keyof KPI) => void;
+}) {
+  const active = sortKey === column;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(column)}
+      className="flex items-center gap-1 font-bold uppercase text-slate-500 hover:text-green-700"
+    >
+      {label}
+      <span className="text-[10px]">
+        {active ? (sortDirection === "asc" ? "▲" : "▼") : "↕"}
+      </span>
+    </button>
+  );
+}
+
+function Input({
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  type?: string;
+}) {
+  return (
+    <input
+      type={type}
+      value={value}
+      placeholder={placeholder}
+      onChange={(e) => onChange(e.target.value)}
+      className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-green-500"
+    />
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const styles =
+    status === "completed"
+      ? "bg-blue-50 text-blue-700"
+      : status === "paused"
+        ? "bg-orange-50 text-orange-700"
+        : "bg-green-50 text-green-700";
+
+  return (
+    <span className={`rounded-full px-3 py-1 text-xs font-bold ${styles}`}>
+      {status}
+    </span>
+  );
+}
+
+function KpiDetailsModal({ kpi, onClose }: { kpi: KPI; onClose: () => void }) {
+  const target = Number(kpi.target_value || 0);
+  const current = Number(kpi.current_value || 0);
+  const progress =
+    target > 0 ? Math.min(Math.round((current / target) * 100), 100) : 0;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-3xl rounded-2xl bg-white p-6 shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4">
+          <div>
+            <p className="text-sm font-semibold text-green-600">KPI Details</p>
+            <h2 className="mt-1 text-2xl font-bold text-slate-950">
+              {kpi.title}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {kpi.category || "General"} · {kpi.status}
+            </p>
+          </div>
+
+          <button
+            onClick={onClose}
+            className="rounded-xl bg-slate-100 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-200"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-4">
+          <ModalCard
+            title="Current"
+            value={formatKpiValue(current, kpi.unit)}
+          />
+          <ModalCard title="Target" value={formatKpiValue(target, kpi.unit)} />
+          <ModalCard title="Progress" value={`${progress}%`} />
+          <ModalCard title="Due Date" value={kpi.due_date || "-"} />
+        </div>
+
+        <div className="mt-6">
+          <div className="mb-2 flex justify-between text-sm font-semibold text-slate-600">
+            <span>Progress</span>
+            <span>{progress}%</span>
+          </div>
+          <div className="h-3 rounded-full bg-slate-100">
+            <div
+              className="h-3 rounded-full bg-green-600"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        </div>
+
+        <div className="mt-6 rounded-2xl bg-slate-50 p-5">
+          <h3 className="font-bold text-slate-950">KPI Detail</h3>
+          <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">
+            {kpi.detail || "No detail added for this KPI."}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ModalCard({
+  title,
+  value,
+}: {
+  title: string;
+  value: string | number;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <p className="text-xs text-slate-500">{title}</p>
+      <h3 className="mt-2 text-lg font-bold text-slate-950">{value}</h3>
+    </div>
+  );
+}
+
+function formatKpiValue(value: number, unit?: string | null) {
+  const formatted = Number(value).toLocaleString();
+  const safeUnit = unit || "";
+
+  if (safeUnit === "Rs") return `Rs ${formatted}`;
+  if (safeUnit === "%") return `${formatted}%`;
+  if (!safeUnit) return formatted;
+
+  return `${formatted} ${safeUnit}`;
+}
+
+
+
+
+
+======================================================================
+FILE: app/(app)/components/TopBar.tsx
+======================================================================
+
+
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { createClientBrowser } from "@/app/lib/supabase/browser";
+
+function getPageTitle(pathname: string) {
+  if (pathname.includes("/modules/kpi")) return "KPI";
+  if (pathname.includes("/modules/invoices")) return "Invoices";
+  if (pathname.includes("/modules/contracts")) return "Contracts";
+  if (pathname.includes("/modules/bookings")) return "Bookings";
+  if (pathname.includes("/modules/purchase-orders")) return "Purchase Orders";
+  if (pathname.includes("/modules/expenses")) return "Expenses";
+  if (pathname.includes("/modules/workflows")) return "Workflows";
+  if (pathname.includes("/workspaces")) return "Workspace";
+  return "Dashboard";
+}
+
+export default function TopBar() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const supabase = useMemo(() => createClientBrowser(), []);
+
+  const [userName, setUserName] = useState("User");
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  const pageTitle = getPageTitle(pathname);
+
+  useEffect(() => {
+    const loadUser = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        setIsLoggedIn(false);
+        return;
+      }
+
+      setIsLoggedIn(true);
+
+      const metadataName =
+        user.user_metadata?.full_name ||
+        user.user_metadata?.name ||
+        user.email?.split("@")[0] ||
+        "User";
+
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("full_name")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      setUserName(profile?.full_name || metadataName);
+    };
+
+    loadUser();
+  }, [supabase]);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.replace("/auth/login");
+    router.refresh();
+  };
+
+  return (
+    <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-slate-200 bg-white/90 px-6 backdrop-blur">
+      <div>
+        <h1 className="text-sm font-semibold text-slate-900">{pageTitle}</h1>
+        <p className="text-xs text-slate-500">Business management portal</p>
+      </div>
+
+      {isLoggedIn && (
+        <div className="flex items-center gap-3">
+          <div className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700">
+            {userName}
+          </div>
+
+          <button
+            onClick={handleLogout}
+            className="rounded-full bg-red-50 px-4 py-2 text-sm font-semibold text-red-600 hover:bg-red-100"
+          >
+            Logout
+          </button>
+        </div>
+      )}
+    </header>
+  );
+}
+
+
+
+
+
+======================================================================
+FILE: app/(app)/layout.tsx
+======================================================================
+
+
+import Link from "next/link";
+import TopBar from "./components/TopBar";
+import MasterDataManager from "./components/MasterDataManager";
+
+const navItems = [
+  { label: "Dashboard", href: "/dashboard" },
+  { label: "KPI", href: "/modules/kpi" },
+  { label: "Invoices", href: "/modules/invoices" },
+  { label: "Contracts", href: "/modules/contracts" },
+  { label: "Bookings", href: "/modules/bookings" },
+  { label: "Purchase Orders", href: "/modules/purchase-orders" },
+  { label: "Expenses", href: "/modules/expenses" },
+  { label: "Workflows", href: "/modules/workflows" },
+  { label: "Credits", href: "/modules/credits" },
+];
+
+export default function AppShellLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex min-h-screen bg-slate-100">
+      <aside className="hidden w-72 shrink-0 border-r border-slate-200 bg-white md:block">
+        <div className="border-b border-slate-200 p-6">
+          <h2 className="text-xl font-bold text-emerald-600">Workspora</h2>
+          <p className="mt-1 text-xs text-slate-500">Modular SaaS Workspace</p>
+        </div>
+
+        <nav className="space-y-1 p-4">
+          {navItems.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className="block rounded-xl px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-emerald-50 hover:text-emerald-700"
+            >
+              {item.label}
+            </Link>
+          ))}
+        </nav>
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <TopBar />
+
+        <div className="border-b border-slate-200 bg-white px-4 py-3 md:px-6">
+          <div className="mx-auto flex max-w-[1500px] items-center justify-end">
+            <MasterDataManager />
+          </div>
+        </div>
+
+        <main className="flex-1 p-4 md:p-6">
+          <div className="mx-auto max-w-[1500px]">{children}</div>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+
+
+
+
+======================================================================
+FILE: app/lib/store/useAppStore.ts
+======================================================================
+
+
+import { create } from "zustand";
+
+type AppState = {
+  user: any;
+  loading: boolean;
+  setUser: (user: any) => void;
+  setLoading: (loading: boolean) => void;
+};
+
+export const useAppStore = create<AppState>((set) => ({
+  user: null,
+  loading: false,
+  setUser: (user) => set({ user }),
+  setLoading: (loading) => set({ loading }),
+}));
+
+
+
+
+
+======================================================================
+FILE: app/lib/supabase/browser.ts
+======================================================================
+
+
+import { createBrowserClient } from "@supabase/ssr";
+
+export function createClientBrowser() {
+  return createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  );
+}
+
+
+
+
+
+======================================================================
+FILE: app/lib/supabase/server.ts
+======================================================================
+
+
+import { createServerClient } from "@supabase/ssr";
+import { cookies } from "next/headers";
+
+export async function createClientServer() {
+  const cookieStore = await cookies();
+
+  return createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll();
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            cookieStore.set(name, value, options);
+          });
+        },
+      },
+    },
+  );
+}
+
+
+
+
+
+======================================================================
+FILE: app/auth/callback/route.ts
+======================================================================
+
+
+import { NextResponse, type NextRequest } from "next/server";
+import { createServerClient } from "@supabase/ssr";
+
+export async function GET(request: NextRequest) {
+  const requestUrl = new URL(request.url);
+
+  const code = requestUrl.searchParams.get("code");
+  const next = requestUrl.searchParams.get("next") || "/dashboard";
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!code) {
+    return NextResponse.redirect(
+      new URL("/auth/login?error=missing_oauth_code", requestUrl.origin),
+    );
+  }
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return NextResponse.redirect(
+      new URL("/auth/login?error=missing_supabase_env", requestUrl.origin),
+    );
+  }
+
+  const response = NextResponse.redirect(new URL(next, requestUrl.origin));
+
+  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+    cookies: {
+      getAll() {
+        return request.cookies.getAll();
+      },
+      setAll(cookiesToSet) {
+        cookiesToSet.forEach(({ name, value, options }) => {
+          response.cookies.set(name, value, options);
+        });
+      },
+    },
+  });
+
+  const { error } = await supabase.auth.exchangeCodeForSession(code);
+
+  if (error) {
+    return NextResponse.redirect(
+      new URL(
+        `/auth/login?error=${encodeURIComponent(error.message)}`,
+        requestUrl.origin,
+      ),
+    );
+  }
+
+  return response;
+}
+
+
+
+
+
+======================================================================
+FILE: app/auth/login/page.tsx
+======================================================================
+
+
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { createClientBrowser } from "@/app/lib/supabase/browser";
+import { useAppStore } from "@/app/lib/store/useAppStore";
+
+type Slide = {
+  title: string;
+  subtitle: string;
+  image: string;
+};
+
+const POST_LOGIN_ROUTE = "/dashboard";
+// If your actual dashboard route is app/page.tsx, change this to:
+// const POST_LOGIN_ROUTE = "/";
+
+const slides: Slide[] = [
+  {
+    title: "Executive Workspace",
+    subtitle:
+      "Manage KPIs, invoices, contracts, bookings and purchase orders in one place.",
+    image: "/login/workspora-slide-1.png",
+  },
+  {
+    title: "Operational Control",
+    subtitle: "Track people, vendors, projects and approvals without clutter.",
+    image: "/login/workspora-slide-2.png",
+  },
+  {
+    title: "Business Intelligence",
+    subtitle:
+      "See executive metrics, trends, forecasts and financial health at a glance.",
+    image: "/login/workspora-slide-3.png",
+  },
+];
+
+function withTimeout<T>(promise: Promise<T>, ms = 2500): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new Error("Session check timeout"));
+    }, ms);
+
+    promise
+      .then((value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((err) => {
+        window.clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
+export default function LoginPage() {
+  const router = useRouter();
+  const supabase = useMemo(() => createClientBrowser(), []);
+  const setGlobalLoading = useAppStore((s) => s.setLoading);
+
+  const mountedRef = useRef(true);
+  const sessionCheckedRef = useRef(false);
+  const routingRef = useRef(false);
+
+  const [activeSlide, setActiveSlide] = useState(0);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  const [checkingSession, setCheckingSession] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  async function routeUser() {
+    if (routingRef.current) return;
+
+    routingRef.current = true;
+
+    try {
+      router.replace(POST_LOGIN_ROUTE);
+    } finally {
+      if (mountedRef.current) {
+        setGlobalLoading(false);
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (sessionCheckedRef.current) return;
+    sessionCheckedRef.current = true;
+
+    let cancelled = false;
+
+    async function checkExistingSession() {
+      setCheckingSession(true);
+
+      try {
+        const result = await withTimeout(supabase.auth.getSession(), 2500);
+
+        if (cancelled) return;
+
+        const session = result?.data?.session;
+
+        if (session?.user) {
+          router.replace(POST_LOGIN_ROUTE);
+          return;
+        }
+      } catch {
+        // Do not block login page if session check fails.
+      } finally {
+        if (!cancelled && mountedRef.current) {
+          setCheckingSession(false);
+          setGlobalLoading(false);
+        }
+      }
+    }
+
+    checkExistingSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router, supabase, setGlobalLoading]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setActiveSlide((prev) => (prev + 1) % slides.length);
+    }, 5000);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
+  async function handleLogin(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (submitting) return;
+
+    const cleanEmail = email.trim();
+
+    if (!cleanEmail || !password) {
+      setErrorMessage("Please enter email and password.");
+      return;
+    }
+
+    setSubmitting(true);
+    setCheckingSession(false);
+    setErrorMessage("");
+    setGlobalLoading(true);
+
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
+        password,
+      });
+
+      if (error) {
+        setErrorMessage(error.message || "Invalid login credentials.");
+        return;
+      }
+
+      await routeUser();
+    } catch {
+      setErrorMessage(
+        "Unable to sign in. Please check Supabase URL, anon key, and network connection.",
+      );
+    } finally {
+      if (mountedRef.current) {
+        setSubmitting(false);
+        setCheckingSession(false);
+        setGlobalLoading(false);
+      }
+    }
+  }
+
+  async function handleGoogleLogin() {
+    if (submitting) return;
+
+    setSubmitting(true);
+    setCheckingSession(false);
+    setErrorMessage("");
+    setGlobalLoading(true);
+
+    try {
+      const origin =
+        typeof window !== "undefined" ? window.location.origin : "";
+
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${origin}/auth/callback?next=/dashboard`,
+          queryParams: {
+            access_type: "offline",
+            prompt: "consent",
+          },
+        },
+      });
+
+      if (error) {
+        setErrorMessage(error.message || "Google login failed.");
+        setSubmitting(false);
+        setGlobalLoading(false);
+      }
+    } catch {
+      setErrorMessage(
+        "Unable to start Google login. Please check Supabase Google OAuth configuration.",
+      );
+      setSubmitting(false);
+      setGlobalLoading(false);
+    }
+  }
+  return (
+    <main className="min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top_left,#dcfce7_0,#f8fafc_32%,#ffffff_74%)] text-slate-950">
+      <section className="flex min-h-screen w-full items-center justify-center px-4 py-5 sm:px-6 lg:px-8">
+        <div className="grid h-[calc(100vh-56px)] min-h-[610px] w-full max-w-[1380px] items-center gap-7 lg:grid-cols-[minmax(0,1.08fr)_420px] xl:gap-8">
+          {/* LEFT PREVIEW / CAROUSEL */}
+          <div className="hidden h-full min-h-0 lg:block">
+            <div className="flex h-full min-h-0 flex-col rounded-[2rem] border border-white/80 bg-white/72 p-4 shadow-2xl shadow-emerald-100/70 backdrop-blur-xl">
+              <div className="min-h-0 flex-1 overflow-hidden rounded-[1.6rem] border border-slate-200 bg-slate-50">
+                <div className="flex h-full min-h-[360px] w-full items-center justify-center overflow-hidden p-3">
+                  <img
+                    src={slides[activeSlide].image}
+                    alt={slides[activeSlide].title}
+                    className="h-full w-full max-w-full select-none object-contain"
+                    draggable={false}
+                  />
+                </div>
+              </div>
+
+              <div className="mt-4 shrink-0 rounded-[1.5rem] bg-slate-950 px-6 py-5 text-white shadow-xl">
+                <div className="flex items-center justify-between gap-5">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold uppercase tracking-[0.28em] text-emerald-300">
+                      Workspora
+                    </p>
+
+                    <h2 className="mt-1 truncate text-xl font-semibold tracking-tight">
+                      {slides[activeSlide].title}
+                    </h2>
+
+                    <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-300">
+                      {slides[activeSlide].subtitle}
+                    </p>
+                  </div>
+
+                  <div className="flex shrink-0 items-center gap-2">
+                    {slides.map((_, index) => (
+                      <button
+                        key={index}
+                        type="button"
+                        onClick={() => setActiveSlide(index)}
+                        className={`h-2.5 rounded-full transition-all ${
+                          index === activeSlide
+                            ? "w-9 bg-emerald-400"
+                            : "w-2.5 bg-white/30 hover:bg-white/50"
+                        }`}
+                        aria-label={`Go to slide ${index + 1}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* RIGHT LOGIN */}
+          <div className="mx-auto flex w-full max-w-[420px] items-center lg:h-full lg:max-w-none">
+            <div className="w-full rounded-[2rem] border border-slate-200 bg-white/92 p-6 shadow-2xl shadow-slate-200/70 backdrop-blur-xl sm:p-7">
+              {/* MOBILE PREVIEW */}
+              <div className="mb-5 block lg:hidden">
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+                  <div className="flex h-[230px] w-full items-center justify-center overflow-hidden p-2">
+                    <img
+                      src={slides[activeSlide].image}
+                      alt={slides[activeSlide].title}
+                      className="h-full w-full max-w-full select-none object-contain"
+                      draggable={false}
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-3 flex items-center justify-center gap-1.5">
+                  {slides.map((_, index) => (
+                    <button
+                      key={index}
+                      type="button"
+                      onClick={() => setActiveSlide(index)}
+                      className={`h-2 rounded-full transition-all ${
+                        index === activeSlide
+                          ? "w-7 bg-emerald-500"
+                          : "w-2 bg-slate-300"
+                      }`}
+                      aria-label={`Go to slide ${index + 1}`}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div className="mb-6">
+                <div className="mb-4 inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
+                  Workspace Control Center
+                </div>
+
+                <h1 className="text-3xl font-semibold tracking-tight text-slate-950">
+                  Sign in to Workspora
+                </h1>
+
+                <p className="mt-3 text-sm leading-6 text-slate-500">
+                  Access your workspace dashboard, modules, members, clients,
+                  projects and executive reports.
+                </p>
+              </div>
+
+              {errorMessage ? (
+                <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-6 text-red-700">
+                  {errorMessage}
+                </div>
+              ) : null}
+
+              {checkingSession ? (
+                <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                  Checking existing session...
+                </div>
+              ) : null}
+
+              <form onSubmit={handleLogin} className="space-y-4">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                    Email
+                  </label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    autoComplete="email"
+                    className="h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                    Password
+                  </label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Enter password"
+                    autoComplete="current-password"
+                    className="h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="flex h-12 w-full items-center justify-center rounded-xl bg-slate-950 px-4 text-sm font-semibold text-white shadow-lg shadow-slate-300 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {submitting ? "Signing in..." : "Sign in"}
+                </button>
+              </form>
+
+              <div className="my-6 flex items-center gap-3">
+                <div className="h-px flex-1 bg-slate-200" />
+                <span className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">
+                  or
+                </span>
+                <div className="h-px flex-1 bg-slate-200" />
+              </div>
+
+              <button
+                type="button"
+                onClick={handleGoogleLogin}
+                disabled={submitting}
+                className="flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Continue with Google
+              </button>
+
+              <p className="mt-6 text-center text-xs leading-5 text-slate-400">
+                Protected workspace access for Workspora modules.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+
+

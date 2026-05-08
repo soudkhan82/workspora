@@ -1,41 +1,41 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
-
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+import { createClientBrowser } from "@/app/lib/supabase/browser";
 
 type TabKey = "clients" | "projects" | "vendors" | "contacts" | "members";
 
 type AnyRow = Record<string, any>;
+
+type WorkspaceContext = {
+  userId: string;
+  workspaceId: string;
+};
 
 const tabs: { key: TabKey; label: string; table: string; note: string }[] = [
   {
     key: "clients",
     label: "Clients",
     table: "clients",
-    note: "Global clients",
+    note: "Your workspace clients",
   },
   {
     key: "projects",
     label: "Projects",
     table: "projects",
-    note: "Global projects",
+    note: "Your workspace projects",
   },
   {
     key: "vendors",
     label: "Vendors",
     table: "vendors",
-    note: "Global vendors",
+    note: "Your workspace vendors",
   },
   {
     key: "contacts",
     label: "Contacts",
     table: "contacts",
-    note: "Global contacts",
+    note: "Your workspace contacts",
   },
   {
     key: "members",
@@ -72,11 +72,17 @@ const emptyForms: Record<TabKey, AnyRow> = {
 };
 
 export default function MasterDataManager() {
+  const supabase = useMemo(() => createClientBrowser(), []);
+
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>("contacts");
   const [rows, setRows] = useState<AnyRow[]>([]);
   const [form, setForm] = useState<AnyRow>({ ...emptyForms.contacts });
   const [editingId, setEditingId] = useState<number | null>(null);
+
+  const [ctx, setCtx] = useState<WorkspaceContext | null>(null);
+  const [contextError, setContextError] = useState("");
+
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -86,21 +92,85 @@ export default function MasterDataManager() {
   );
 
   useEffect(() => {
-    if (open) loadRows();
+    if (open) void loadRows();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, activeTab]);
 
+  async function getWorkspaceContext(): Promise<WorkspaceContext | null> {
+    if (ctx?.userId && ctx?.workspaceId) return ctx;
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError) {
+      setContextError(userError.message);
+      return null;
+    }
+
+    if (!user) {
+      setContextError("User not authenticated. Please login again.");
+      return null;
+    }
+
+    const { data: membership, error: membershipError } = await supabase
+      .from("workspace_members")
+      .select("workspace_id,status")
+      .eq("user_id", user.id)
+      .limit(1)
+      .maybeSingle();
+
+    if (membershipError) {
+      setContextError(membershipError.message);
+      return null;
+    }
+
+    if (!membership?.workspace_id) {
+      setContextError("No active workspace is linked to this user.");
+      return null;
+    }
+
+    if (
+      membership.status &&
+      String(membership.status).toLowerCase() !== "active"
+    ) {
+      setContextError("Your workspace membership is not active.");
+      return null;
+    }
+
+    const nextCtx = {
+      userId: user.id,
+      workspaceId: String(membership.workspace_id),
+    };
+
+    setCtx(nextCtx);
+    setContextError("");
+    return nextCtx;
+  }
+
   async function loadRows() {
     setLoading(true);
+    setContextError("");
+
+    const currentCtx = await getWorkspaceContext();
+
+    if (!currentCtx) {
+      setRows([]);
+      setLoading(false);
+      return;
+    }
 
     const selectQuery =
       activeTab === "contacts" || activeTab === "members"
-        ? "id,full_name,email,phone,designation,company,department,status,notes,created_at"
-        : "id,name,created_at";
+        ? "id,full_name,email,phone,designation,company,department,status,notes,created_at,workspace_id,created_by"
+        : "id,name,created_at,workspace_id,created_by";
 
     const { data, error } = await supabase
       .from(activeMeta.table)
       .select(selectQuery)
+      .eq("workspace_id", currentCtx.workspaceId)
+      .eq("created_by", currentCtx.userId)
       .order("created_at", { ascending: false });
 
     setLoading(false);
@@ -124,10 +194,11 @@ export default function MasterDataManager() {
     setForm({ ...emptyForms[tab] });
     setEditingId(null);
     setRows([]);
+    setContextError("");
   }
 
   function startEdit(row: AnyRow) {
-    setEditingId(row.id);
+    setEditingId(Number(row.id));
     setForm({
       ...emptyForms[activeTab],
       ...row,
@@ -135,6 +206,9 @@ export default function MasterDataManager() {
   }
 
   async function saveRow() {
+    const currentCtx = await getWorkspaceContext();
+    if (!currentCtx) return;
+
     if (activeTab === "contacts" || activeTab === "members") {
       if (!String(form.full_name || "").trim()) {
         alert("Full name is required.");
@@ -146,6 +220,11 @@ export default function MasterDataManager() {
     }
 
     setSaving(true);
+
+    const basePayload = {
+      workspace_id: currentCtx.workspaceId,
+      created_by: currentCtx.userId,
+    };
 
     const payload: AnyRow =
       activeTab === "contacts" || activeTab === "members"
@@ -168,7 +247,11 @@ export default function MasterDataManager() {
           .from(activeMeta.table)
           .update(payload)
           .eq("id", editingId)
-      : await supabase.from(activeMeta.table).insert(payload);
+          .eq("workspace_id", currentCtx.workspaceId)
+          .eq("created_by", currentCtx.userId)
+      : await supabase
+          .from(activeMeta.table)
+          .insert({ ...payload, ...basePayload });
 
     setSaving(false);
 
@@ -190,6 +273,9 @@ export default function MasterDataManager() {
   }
 
   async function deleteRow(row: AnyRow) {
+    const currentCtx = await getWorkspaceContext();
+    if (!currentCtx) return;
+
     const label = row.full_name || row.name || "this record";
     const ok = window.confirm(`Delete ${label}?`);
     if (!ok) return;
@@ -197,7 +283,9 @@ export default function MasterDataManager() {
     const { error } = await supabase
       .from(activeMeta.table)
       .delete()
-      .eq("id", row.id);
+      .eq("id", row.id)
+      .eq("workspace_id", currentCtx.workspaceId)
+      .eq("created_by", currentCtx.userId);
 
     if (error) {
       alert(error.message);
@@ -223,14 +311,15 @@ export default function MasterDataManager() {
             <div className="flex items-start justify-between border-b border-slate-200 px-6 py-5">
               <div>
                 <p className="text-sm font-semibold text-emerald-600">
-                  Global Master Data
+                  User-Scoped Master Data
                 </p>
                 <h2 className="text-2xl font-bold text-slate-950">
                   Clients, Projects, Vendors, Contacts & Members
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Contacts and Members now use <b>public.contacts</b> as the
-                  single source.
+                  Values are filtered by current <b>workspace_id</b> and{" "}
+                  <b>created_by</b>. Contacts and Members use{" "}
+                  <b>public.contacts</b> as the single source.
                 </p>
               </div>
 
@@ -273,6 +362,12 @@ export default function MasterDataManager() {
               </aside>
 
               <main className="p-6">
+                {contextError ? (
+                  <div className="mb-5 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm font-semibold text-amber-800">
+                    {contextError}
+                  </div>
+                ) : null}
+
                 <div className="mb-5 rounded-2xl border border-slate-200 bg-white p-5">
                   <div className="mb-4 flex items-center justify-between">
                     <div>
@@ -363,7 +458,7 @@ export default function MasterDataManager() {
                     <button
                       type="button"
                       onClick={saveRow}
-                      disabled={saving}
+                      disabled={saving || !!contextError}
                       className="rounded-xl bg-emerald-600 px-6 py-3 text-sm font-bold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
                     >
                       {saving ? "Saving..." : editingId ? "Update" : "Add"}

@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { createClientBrowser } from "@/app/lib/supabase/browser";
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+type WorkspaceContext = {
+  userId: string;
+  workspaceId: string;
+};
 
 const currencies = ["PKR", "USD", "EUR", "GBP", "AED", "SAR", "CNY"];
 
@@ -17,10 +18,8 @@ type DropdownItem = {
 type PurchaseOrder = {
   id: number;
   po_no: string;
-  client_id: number | null;
+  vendor_id: number | null;
   project_id: number | null;
-  global_client_id?: number | null;
-  global_project_id?: number | null;
   status_id: number | null;
   line_code: string;
   line_item: string;
@@ -31,16 +30,16 @@ type PurchaseOrder = {
   delivery_date: string | null;
   notes: string | null;
   created_at?: string;
-  client_name?: string | null;
+  vendor_name?: string | null;
   project_name?: string | null;
   status?: string | null;
 };
 
-type DropdownType = "client" | "project" | "status";
+type DropdownType = "vendor" | "project" | "status";
 
 type PoHeaderForm = {
   po_no: string;
-  client_id: string;
+  vendor_id: string;
   project_id: string;
   status_id: string;
   currency: string;
@@ -68,7 +67,7 @@ type LineCatalogItem = {
 type PoGroup = {
   po_no: string;
   po_date: string | null;
-  client_name: string | null;
+  vendor_name: string | null;
   project_name: string | null;
   status: string | null;
   currency: string;
@@ -79,7 +78,7 @@ type PoGroup = {
 
 const emptyHeader: PoHeaderForm = {
   po_no: "",
-  client_id: "",
+  vendor_id: "",
   project_id: "",
   status_id: "",
   currency: "PKR",
@@ -102,33 +101,17 @@ const emptyMasterLineItem = {
   unit_price: "",
 };
 
-const defaultLineCatalog: LineCatalogItem[] = [
-  {
-    line_code: "LC-001-001",
-    line_item: "Fiber Cable",
-    unit_of_measurement: "Meter",
-    unit_price: 3819,
-  },
-  {
-    line_code: "LC-002-002",
-    line_item: "Patch Cord",
-    unit_of_measurement: "Piece",
-    unit_price: 2403,
-  },
-  {
-    line_code: "LC-008-008",
-    line_item: "UPS Battery",
-    unit_of_measurement: "Unit",
-    unit_price: 8779,
-  },
-];
-
+const defaultLineCatalog: LineCatalogItem[] = [];
 export default function PurchaseOrdersPage() {
   const fileRef = useRef<HTMLInputElement | null>(null);
   const lineMasterFileRef = useRef<HTMLInputElement | null>(null);
+  const supabase = useMemo(() => createClientBrowser(), []);
+
+  const [ctx, setCtx] = useState<WorkspaceContext | null>(null);
+  const [contextError, setContextError] = useState("");
 
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
-  const [clients, setClients] = useState<DropdownItem[]>([]);
+  const [vendors, setVendors] = useState<DropdownItem[]>([]);
   const [projects, setProjects] = useState<DropdownItem[]>([]);
   const [statuses, setStatuses] = useState<DropdownItem[]>([]);
 
@@ -164,32 +147,105 @@ export default function PurchaseOrdersPage() {
   );
 
   useEffect(() => {
-    loadAll();
+    void loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function getWorkspaceContext(): Promise<WorkspaceContext | null> {
+    if (ctx?.userId && ctx?.workspaceId) return ctx;
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError) {
+      setContextError(userError.message);
+      return null;
+    }
+
+    if (!user) {
+      setContextError("User not authenticated. Please login again.");
+      return null;
+    }
+
+    const { data: membership, error: membershipError } = await supabase
+      .from("workspace_members")
+      .select("workspace_id,status")
+      .eq("user_id", user.id)
+      .limit(1)
+      .maybeSingle();
+
+    if (membershipError) {
+      setContextError(membershipError.message);
+      return null;
+    }
+
+    if (!membership?.workspace_id) {
+      setContextError("No active workspace found for this user.");
+      return null;
+    }
+
+    if (
+      membership.status &&
+      String(membership.status).toLowerCase() !== "active"
+    ) {
+      setContextError("Your workspace membership is not active.");
+      return null;
+    }
+
+    const nextCtx = {
+      userId: user.id,
+      workspaceId: String(membership.workspace_id),
+    };
+
+    setCtx(nextCtx);
+    setContextError("");
+
+    return nextCtx;
+  }
 
   async function loadAll() {
     setLoading(true);
+
+    const currentCtx = await getWorkspaceContext();
+
+    if (!currentCtx) {
+      setOrders([]);
+      setVendors([]);
+      setProjects([]);
+      setStatuses([]);
+      setMasterLineItems([]);
+      setLoading(false);
+      return;
+    }
+
     await Promise.all([
-      loadOrders(),
-      loadClients(),
-      loadProjects(),
-      loadStatuses(),
-      loadLineItemsMaster(),
+      loadOrders(currentCtx),
+      loadVendors(currentCtx),
+      loadProjects(currentCtx),
+      loadStatuses(currentCtx),
+      loadLineItemsMaster(currentCtx),
     ]);
+
     setLoading(false);
   }
 
-  async function loadOrders() {
+  async function loadOrders(currentCtx?: WorkspaceContext) {
+    const scopedCtx = currentCtx ?? (await getWorkspaceContext());
+    if (!scopedCtx) return;
+
     const { data, error } = await supabase
       .from("purchase_orders")
       .select(
         `
         *,
-        clients!global_client_id(name),
-        projects!global_project_id(name),
+        vendors!purchase_orders_vendor_id_fkey(name),
+        projects!purchase_orders_project_id_fkey(name),
         po_statuses(name)
       `,
       )
+      .eq("workspace_id", scopedCtx.workspaceId)
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -200,48 +256,88 @@ export default function PurchaseOrdersPage() {
     setOrders(
       data?.map((po: any) => ({
         ...po,
-        client_name: po.clients?.name ?? null,
+        vendor_name: po.vendors?.name ?? null,
         project_name: po.projects?.name ?? null,
         status: po.po_statuses?.name ?? null,
       })) ?? [],
     );
   }
 
-  async function loadClients() {
-    const { data } = await supabase.from("clients").select("*").order("name");
-    setClients(data ?? []);
+  async function loadVendors(currentCtx?: WorkspaceContext) {
+    const scopedCtx = currentCtx ?? (await getWorkspaceContext());
+    if (!scopedCtx) return;
+
+    const { data, error } = await supabase
+      .from("vendors")
+      .select("id,name")
+      .eq("workspace_id", scopedCtx.workspaceId)
+      .eq("created_by", scopedCtx.userId)
+      .order("name", { ascending: true });
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    setVendors(data ?? []);
   }
 
-  async function loadProjects() {
-    const { data } = await supabase.from("projects").select("*").order("name");
+  async function loadProjects(currentCtx?: WorkspaceContext) {
+    const scopedCtx = currentCtx ?? (await getWorkspaceContext());
+    if (!scopedCtx) return;
+
+    const { data, error } = await supabase
+      .from("projects")
+      .select("id,name")
+      .eq("workspace_id", scopedCtx.workspaceId)
+      .eq("created_by", scopedCtx.userId)
+      .order("name", { ascending: true });
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
     setProjects(data ?? []);
   }
 
-  async function loadStatuses() {
-    const { data } = await supabase
+  async function loadStatuses(currentCtx?: WorkspaceContext) {
+    const scopedCtx = currentCtx ?? (await getWorkspaceContext());
+    if (!scopedCtx) return;
+
+    const { data, error } = await supabase
       .from("po_statuses")
-      .select("*")
-      .order("name");
+      .select("id,name")
+      .eq("workspace_id", scopedCtx.workspaceId)
+      .eq("created_by", scopedCtx.userId)
+      .order("name", { ascending: true });
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
     setStatuses(data ?? []);
   }
 
-  async function loadLineItemsMaster() {
+  async function loadLineItemsMaster(currentCtx?: WorkspaceContext) {
+    const scopedCtx = currentCtx ?? (await getWorkspaceContext());
+    if (!scopedCtx) return;
+
     const { data, error } = await supabase
       .from("line_items_master")
       .select("*")
+      .eq("workspace_id", scopedCtx.workspaceId)
+      .eq("created_by", scopedCtx.userId)
       .order("line_code", { ascending: true })
       .range(0, 9999);
 
-    // Keep page usable even if the master table is not ready.
     if (error) {
       console.warn("line_items_master load warning:", error.message);
       setMasterLineItems([]);
       return;
     }
 
-    // Supports both old and new column names:
-    // line_item OR item_description OR description
-    // unit_of_measurement OR uom
     setMasterLineItems(
       (data ?? [])
         .map((item: any) => {
@@ -337,7 +433,7 @@ export default function PurchaseOrdersPage() {
       return {
         po_no: poNo,
         po_date: first.delivery_date ?? first.created_at ?? null,
-        client_name: first.client_name ?? null,
+        vendor_name: first.vendor_name ?? null,
         project_name: first.project_name ?? null,
         status: first.status ?? null,
         currency: first.currency || "PKR",
@@ -356,7 +452,7 @@ export default function PurchaseOrdersPage() {
       [
         po.po_no,
         po.po_date,
-        po.client_name,
+        po.vendor_name,
         po.project_name,
         po.status,
         po.currency,
@@ -436,10 +532,8 @@ export default function PurchaseOrdersPage() {
     setEditingPoNo(group.po_no);
     setHeaderForm({
       po_no: first.po_no ?? "",
-      client_id: first.global_client_id ? String(first.global_client_id) : "",
-      project_id: first.global_project_id
-        ? String(first.global_project_id)
-        : "",
+      vendor_id: first.vendor_id ? String(first.vendor_id) : "",
+      project_id: first.project_id ? String(first.project_id) : "",
       status_id: first.status_id ? String(first.status_id) : "",
       currency: first.currency ?? "PKR",
       delivery_date: first.delivery_date ?? "",
@@ -544,6 +638,9 @@ export default function PurchaseOrdersPage() {
   }
 
   async function savePo() {
+    const currentCtx = await getWorkspaceContext();
+    if (!currentCtx) return;
+
     if (!headerForm.po_no.trim()) return alert("PO No is required.");
     if (!lineRows.length) return alert("Please add at least one line item.");
 
@@ -561,6 +658,7 @@ export default function PurchaseOrdersPage() {
       const { data: existingPO, error: existingError } = await supabase
         .from("purchase_orders")
         .select("id")
+        .eq("workspace_id", currentCtx.workspaceId)
         .eq("po_no", cleanPoNo)
         .maybeSingle();
 
@@ -568,19 +666,15 @@ export default function PurchaseOrdersPage() {
 
       if (existingPO) {
         return alert(
-          `PO No "${cleanPoNo}" already exists. Please use a unique PO No.`,
+          `PO No "${cleanPoNo}" already exists in this workspace. Please use a unique PO No.`,
         );
       }
     }
 
     const payload = validLines.map((row) => ({
       po_no: cleanPoNo,
-      global_client_id: headerForm.client_id
-        ? Number(headerForm.client_id)
-        : null,
-      global_project_id: headerForm.project_id
-        ? Number(headerForm.project_id)
-        : null,
+      vendor_id: headerForm.vendor_id ? Number(headerForm.vendor_id) : null,
+      project_id: headerForm.project_id ? Number(headerForm.project_id) : null,
       status_id: headerForm.status_id ? Number(headerForm.status_id) : null,
       line_code: row.line_code.trim(),
       line_item: row.line_item.trim(),
@@ -590,12 +684,15 @@ export default function PurchaseOrdersPage() {
       quantity: Number(row.quantity || 0),
       delivery_date: headerForm.delivery_date || null,
       notes: headerForm.notes || null,
+      workspace_id: currentCtx.workspaceId,
+      created_by: currentCtx.userId,
     }));
 
     if (editingPoNo) {
       const { error: deleteError } = await supabase
         .from("purchase_orders")
         .delete()
+        .eq("workspace_id", currentCtx.workspaceId)
         .eq("po_no", editingPoNo);
 
       if (deleteError) return alert(deleteError.message);
@@ -613,26 +710,30 @@ export default function PurchaseOrdersPage() {
     setEditingPoNo(null);
     setHeaderForm(emptyHeader);
     setLineRows([]);
-    await loadOrders();
+    await loadOrders(currentCtx);
   }
   async function deletePo(poNo: string) {
+    const currentCtx = await getWorkspaceContext();
+    if (!currentCtx) return;
+
     if (!confirm("Delete this purchase order and all linked line items?"))
       return;
 
     const { error } = await supabase
       .from("purchase_orders")
       .delete()
+      .eq("workspace_id", currentCtx.workspaceId)
       .eq("po_no", poNo);
 
     if (error) return alert(error.message);
 
-    await loadOrders();
+    await loadOrders(currentCtx);
   }
 
   function downloadCsvTemplate() {
     const headers = [
       "po_no",
-      "client_name",
+      "vendor_name",
       "project_name",
       "status",
       "line_code",
@@ -736,6 +837,9 @@ export default function PurchaseOrdersPage() {
   }
 
   async function handleCsvUpload(file: File) {
+    const currentCtx = await getWorkspaceContext();
+    if (!currentCtx) return;
+
     const text = await file.text();
     const rows = parseCsv(text);
 
@@ -749,7 +853,7 @@ export default function PurchaseOrdersPage() {
 
     const get = (row: string[], key: string) => row[headers.indexOf(key)] ?? "";
 
-    const clientMap = new Map(clients.map((c) => [c.name.toLowerCase(), c.id]));
+    const vendorMap = new Map(vendors.map((v) => [v.name.toLowerCase(), v.id]));
     const projectMap = new Map(
       projects.map((p) => [p.name.toLowerCase(), p.id]),
     );
@@ -759,9 +863,8 @@ export default function PurchaseOrdersPage() {
 
     const payload = dataRows.map((row) => ({
       po_no: get(row, "po_no"),
-      global_client_id:
-        clientMap.get(get(row, "client_name").toLowerCase()) ?? null,
-      global_project_id:
+      vendor_id: vendorMap.get(get(row, "vendor_name").toLowerCase()) ?? null,
+      project_id:
         projectMap.get(get(row, "project_name").toLowerCase()) ?? null,
       status_id: statusMap.get(get(row, "status").toLowerCase()) ?? null,
       line_code: get(row, "line_code"),
@@ -772,6 +875,8 @@ export default function PurchaseOrdersPage() {
       quantity: Number(get(row, "quantity") || 0),
       delivery_date: get(row, "delivery_date") || null,
       notes: get(row, "notes") || null,
+      workspace_id: currentCtx.workspaceId,
+      created_by: currentCtx.userId,
     }));
 
     const valid = payload.filter((x) => x.po_no && x.line_code && x.line_item);
@@ -789,7 +894,7 @@ export default function PurchaseOrdersPage() {
     }
 
     alert(`${valid.length} purchase order line records uploaded successfully.`);
-    await loadOrders();
+    await loadOrders(currentCtx);
 
     if (fileRef.current) fileRef.current.value = "";
   }
@@ -818,6 +923,9 @@ export default function PurchaseOrdersPage() {
   }
 
   async function saveMasterLineItem() {
+    const currentCtx = await getWorkspaceContext();
+    if (!currentCtx) return;
+
     const lineCode = lineMasterForm.line_code.trim();
     const lineItem = lineMasterForm.line_item.trim();
     const uom = lineMasterForm.unit_of_measurement.trim();
@@ -837,33 +945,39 @@ export default function PurchaseOrdersPage() {
           unit_of_measurement: uom,
           unit_price: price,
         })
+        .eq("workspace_id", currentCtx.workspaceId)
+        .eq("created_by", currentCtx.userId)
         .eq("line_code", editingMasterLineCode);
 
       if (error) return alert(error.message);
     } else {
-      const { error } = await supabase.from("line_items_master").upsert(
-        {
-          line_code: lineCode,
-          line_item: lineItem,
-          unit_of_measurement: uom,
-          unit_price: price,
-        },
-        { onConflict: "line_code" },
-      );
+      const { error } = await supabase.from("line_items_master").insert({
+        line_code: lineCode,
+        line_item: lineItem,
+        unit_of_measurement: uom,
+        unit_price: price,
+        workspace_id: currentCtx.workspaceId,
+        created_by: currentCtx.userId,
+      });
 
       if (error) return alert(error.message);
     }
 
     resetLineMasterForm();
-    await loadLineItemsMaster();
+    await loadLineItemsMaster(currentCtx);
   }
 
   async function deleteMasterLineItem(lineCode: string) {
+    const currentCtx = await getWorkspaceContext();
+    if (!currentCtx) return;
+
     if (!confirm("Delete this line item from master list?")) return;
 
     const { error } = await supabase
       .from("line_items_master")
       .delete()
+      .eq("workspace_id", currentCtx.workspaceId)
+      .eq("created_by", currentCtx.userId)
       .eq("line_code", lineCode);
 
     if (error) return alert(error.message);
@@ -871,10 +985,13 @@ export default function PurchaseOrdersPage() {
     setSelectedMasterLineCodes((prev) =>
       prev.filter((code) => code !== lineCode),
     );
-    await loadLineItemsMaster();
+    await loadLineItemsMaster(currentCtx);
   }
 
   async function bulkDeleteMasterLineItems() {
+    const currentCtx = await getWorkspaceContext();
+    if (!currentCtx) return;
+
     if (!selectedMasterLineCodes.length) return;
     if (
       !confirm(
@@ -886,12 +1003,14 @@ export default function PurchaseOrdersPage() {
     const { error } = await supabase
       .from("line_items_master")
       .delete()
+      .eq("workspace_id", currentCtx.workspaceId)
+      .eq("created_by", currentCtx.userId)
       .in("line_code", selectedMasterLineCodes);
 
     if (error) return alert(error.message);
 
     setSelectedMasterLineCodes([]);
-    await loadLineItemsMaster();
+    await loadLineItemsMaster(currentCtx);
   }
 
   function toggleMasterLineSelection(lineCode: string) {
@@ -941,6 +1060,9 @@ export default function PurchaseOrdersPage() {
   }
 
   async function handleLineItemsCsvUpload(file: File) {
+    const currentCtx = await getWorkspaceContext();
+    if (!currentCtx) return;
+
     const text = await file.text();
     const rows = parseCsv(text);
 
@@ -974,6 +1096,8 @@ export default function PurchaseOrdersPage() {
           "unit",
         ]).trim(),
         unit_price: Number(get(row, ["unit_price", "price"]) || 0),
+        workspace_id: currentCtx.workspaceId,
+        created_by: currentCtx.userId,
       }))
       .filter(
         (item) => item.line_code && item.line_item && item.unit_of_measurement,
@@ -986,52 +1110,62 @@ export default function PurchaseOrdersPage() {
       return;
     }
 
-    const { error } = await supabase
-      .from("line_items_master")
-      .upsert(payload, { onConflict: "line_code" });
+    const { error } = await supabase.from("line_items_master").insert(payload);
 
     if (error) return alert(error.message);
 
     alert(`${payload.length} line item(s) uploaded successfully.`);
-    await loadLineItemsMaster();
+    await loadLineItemsMaster(currentCtx);
     if (lineMasterFileRef.current) lineMasterFileRef.current.value = "";
   }
 
   function getDropdownItems() {
-    if (dropdownModal === "client") return clients;
+    if (dropdownModal === "vendor") return vendors;
     if (dropdownModal === "project") return projects;
     if (dropdownModal === "status") return statuses;
     return [];
   }
 
   function getDropdownTable() {
-    if (dropdownModal === "client") return "clients";
+    if (dropdownModal === "vendor") return "vendors";
     if (dropdownModal === "project") return "projects";
     if (dropdownModal === "status") return "po_statuses";
     return "";
   }
 
   function getDropdownTitle() {
-    if (dropdownModal === "client") return "Manage Clients";
+    if (dropdownModal === "vendor") return "Manage Vendors";
     if (dropdownModal === "project") return "Manage Projects";
     if (dropdownModal === "status") return "Manage Statuses";
     return "";
   }
 
   async function refreshDropdown() {
-    if (dropdownModal === "client") await loadClients();
+    if (dropdownModal === "vendor") await loadVendors();
     if (dropdownModal === "project") await loadProjects();
     if (dropdownModal === "status") await loadStatuses();
   }
 
   async function saveDropdownItem() {
+    const currentCtx = await getWorkspaceContext();
+    if (!currentCtx) return;
+
     const table = getDropdownTable();
     if (!table || !dropdownName.trim()) return;
 
-    const payload = { name: dropdownName.trim() };
+    const payload = {
+      name: dropdownName.trim(),
+      workspace_id: currentCtx.workspaceId,
+      created_by: currentCtx.userId,
+    };
 
     const { error } = editingDropdownId
-      ? await supabase.from(table).update(payload).eq("id", editingDropdownId)
+      ? await supabase
+          .from(table)
+          .update({ name: dropdownName.trim() })
+          .eq("id", editingDropdownId)
+          .eq("workspace_id", currentCtx.workspaceId)
+          .eq("created_by", currentCtx.userId)
       : await supabase.from(table).insert(payload);
 
     if (error) return alert(error.message);
@@ -1039,20 +1173,29 @@ export default function PurchaseOrdersPage() {
     setDropdownName("");
     setEditingDropdownId(null);
     await refreshDropdown();
-    await loadOrders();
+    await loadOrders(currentCtx);
   }
 
   async function deleteDropdownItem(id: number) {
+    const currentCtx = await getWorkspaceContext();
+    if (!currentCtx) return;
+
     const table = getDropdownTable();
     if (!table) return;
     if (!confirm("Delete this item? Existing POs will keep empty reference."))
       return;
 
-    const { error } = await supabase.from(table).delete().eq("id", id);
+    const { error } = await supabase
+      .from(table)
+      .delete()
+      .eq("id", id)
+      .eq("workspace_id", currentCtx.workspaceId)
+      .eq("created_by", currentCtx.userId);
+
     if (error) return alert(error.message);
 
     await refreshDropdown();
-    await loadOrders();
+    await loadOrders(currentCtx);
   }
 
   function openDropdownModal(type: DropdownType) {
@@ -1079,6 +1222,11 @@ export default function PurchaseOrdersPage() {
 
   return (
     <div className="px-[120px] py-12">
+      {contextError ? (
+        <div className="mb-5 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm font-semibold text-amber-800">
+          {contextError}
+        </div>
+      ) : null}
       <div className="mb-8 flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-950">
@@ -1092,10 +1240,10 @@ export default function PurchaseOrdersPage() {
 
         <div className="flex flex-wrap justify-end gap-3">
           <button
-            onClick={() => openDropdownModal("client")}
+            onClick={() => openDropdownModal("vendor")}
             className="topBtn"
           >
-            Manage Clients
+            Manage Vendors
           </button>
           <button
             onClick={() => openDropdownModal("project")}
@@ -1155,7 +1303,7 @@ export default function PurchaseOrdersPage() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search PO, client, project, status, line code, line item, currency..."
+            placeholder="Search PO, vendor, project, status, line code, line item, currency..."
             className="h-12 flex-1 rounded-xl border border-slate-300 px-4 text-sm outline-none focus:border-emerald-500"
           />
 
@@ -1173,7 +1321,7 @@ export default function PurchaseOrdersPage() {
               <tr className="bg-slate-950 text-white">
                 <Th>PO No</Th>
                 <Th>PO Date</Th>
-                <Th>Client</Th>
+                <Th>Vendor</Th>
                 <Th>Project</Th>
                 <Th>Status</Th>
                 <Th>Line Items</Th>
@@ -1197,7 +1345,7 @@ export default function PurchaseOrdersPage() {
                   <tr key={po.po_no} className="border-t border-slate-100">
                     <Td bold>{po.po_no}</Td>
                     <Td>{formatDate(po.po_date)}</Td>
-                    <Td>{po.client_name ?? "-"}</Td>
+                    <Td>{po.vendor_name ?? "Not Applicable"}</Td>
                     <Td>{po.project_name ?? "-"}</Td>
                     <Td>
                       <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-800">
@@ -1275,12 +1423,13 @@ export default function PurchaseOrdersPage() {
                 />
 
                 <Select
-                  label="Client"
-                  value={headerForm.client_id}
+                  label="Vendor"
+                  value={headerForm.vendor_id}
                   onChange={(v) =>
-                    setHeaderForm({ ...headerForm, client_id: v })
+                    setHeaderForm({ ...headerForm, vendor_id: v })
                   }
-                  items={clients}
+                  items={vendors}
+                  emptyLabel="Not Applicable"
                 />
 
                 <Select
@@ -2160,11 +2309,13 @@ function Select({
   value,
   onChange,
   items,
+  emptyLabel = "Select",
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   items: DropdownItem[];
+  emptyLabel?: string;
 }) {
   return (
     <div>
@@ -2176,7 +2327,7 @@ function Select({
         onChange={(e) => onChange(e.target.value)}
         className="h-12 w-full rounded-xl border border-slate-300 bg-white px-4 text-sm outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
       >
-        <option value="">Select</option>
+        <option value="">{emptyLabel}</option>
         {items.map((item) => (
           <option key={item.id} value={item.id}>
             {item.name}
