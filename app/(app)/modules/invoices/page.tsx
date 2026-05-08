@@ -1,11 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
-
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+import { createClientBrowser } from "@/app/lib/supabase/browser";
 
 type DropdownItem = {
   id: number;
@@ -38,6 +34,132 @@ type DropdownType = "client" | "vendor" | "project" | "milestone" | "status";
 
 const currencies = ["PKR", "USD", "EUR", "GBP", "AED", "SAR", "CNY"];
 
+const csvTemplateRows = [
+  [
+    "invoice_no",
+    "client_name",
+    "vendor_name",
+    "project_name",
+    "amount",
+    "currency",
+    "milestone",
+    "status",
+    "due_date",
+    "paid_date",
+    "notes",
+  ],
+  [
+    "INV-001",
+    "Client A",
+    "Vendor A",
+    "Project A",
+    "25000",
+    "PKR",
+    "Phase 1",
+    "Pending",
+    "2026-05-30",
+    "",
+    "Sample invoice",
+  ],
+];
+
+function escapeCsvCell(value: string | number | null | undefined) {
+  const text = String(value ?? "");
+  if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+  return text;
+}
+
+function buildCsv(rows: Array<Array<string | number | null | undefined>>) {
+  return rows.map((row) => row.map(escapeCsvCell).join(",")).join("\n");
+}
+
+function parseCsvLine(line: string) {
+  const cells: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    const next = line[i + 1];
+
+    if (char === '"' && inQuotes && next === '"') {
+      current += '"';
+      i += 1;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === "," && !inQuotes) {
+      cells.push(current.trim());
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+
+  cells.push(current.trim());
+  return cells;
+}
+
+function parseCsv(text: string) {
+  const lines = text
+    .replace(/^\uFEFF/, "")
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0);
+
+  if (lines.length < 2) return [];
+
+  const headers = parseCsvLine(lines[0]).map((header) =>
+    header
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "_")
+      .replace(/[^a-z0-9_]/g, ""),
+  );
+
+  return lines.slice(1).map((line) => {
+    const cells = parseCsvLine(line);
+    return headers.reduce<Record<string, string>>((acc, header, index) => {
+      acc[header] = cells[index]?.trim() ?? "";
+      return acc;
+    }, {});
+  });
+}
+
+function readCsvValue(row: Record<string, string>, keys: string[]) {
+  for (const key of keys) {
+    const normalizedKey = key
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "_")
+      .replace(/[^a-z0-9_]/g, "");
+    if (row[normalizedKey]) return row[normalizedKey].trim();
+  }
+  return "";
+}
+
+function normalizeDateInput(value: string) {
+  const text = value.trim();
+  if (!text) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+
+  const slashMatch = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slashMatch) {
+    const [, dd, mm, yyyy] = slashMatch;
+    return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+  }
+
+  return text;
+}
+
+function normalizeDropdownRows(rows: any[] | null | undefined): DropdownItem[] {
+  return (rows ?? [])
+    .map((item) => ({
+      id: Number(item.id),
+      name: String(item.name ?? item.full_name ?? item.title ?? "").trim(),
+    }))
+    .filter((item) => item.id && item.name);
+}
+
 const emptyForm = {
   invoice_no: "",
   client_id: "",
@@ -61,6 +183,7 @@ function groupAmountByCurrency(rows: Invoice[]) {
 }
 
 export default function InvoicesPage() {
+  const supabase = useMemo(() => createClientBrowser(), []);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [clients, setClients] = useState<DropdownItem[]>([]);
   const [vendors, setVendors] = useState<DropdownItem[]>([]);
@@ -124,22 +247,13 @@ export default function InvoicesPage() {
       ] = await Promise.all([
         supabase
           .from("invoices")
-          .select(
-            `
-              *,
-              clients!global_client_id(name),
-              vendors!global_vendor_id(name),
-              projects!global_project_id(name),
-              invoice_milestones(name),
-              invoice_statuses(name)
-            `,
-          )
+          .select("*")
           .order("created_at", { ascending: false }),
-        supabase.from("clients").select("*").order("name"),
-        supabase.from("vendors").select("*").order("name"),
-        supabase.from("projects").select("*").order("name"),
-        supabase.from("invoice_milestones").select("*").order("name"),
-        supabase.from("invoice_statuses").select("*").order("name"),
+        supabase.from("invoice_clients").select("id, name").order("name"),
+        supabase.from("invoice_vendors").select("id, name").order("name"),
+        supabase.from("invoice_projects").select("id, name").order("name"),
+        supabase.from("invoice_milestones").select("id, name").order("name"),
+        supabase.from("invoice_statuses").select("id, name").order("name"),
       ]);
 
       if (invoiceRes.error) throw invoiceRes.error;
@@ -149,20 +263,47 @@ export default function InvoicesPage() {
       if (milestoneRes.error) throw milestoneRes.error;
       if (statusRes.error) throw statusRes.error;
 
+      const clientRows = normalizeDropdownRows(clientRes.data);
+      const vendorRows = normalizeDropdownRows(vendorRes.data);
+      const projectRows = normalizeDropdownRows(projectRes.data);
+      const milestoneRows = normalizeDropdownRows(milestoneRes.data);
+      const statusRows = normalizeDropdownRows(statusRes.data);
+
       const mappedInvoices =
         invoiceRes.data?.map((item: any) => ({
           ...item,
-          client_name: item.clients?.name ?? null,
-          vendor_name: item.vendors?.name ?? null,
-          project_name: item.projects?.name ?? null,
+          client_name:
+            item.client_name ??
+            clientRows.find(
+              (x) =>
+                Number(x.id) ===
+                Number(item.client_id ?? item.global_client_id),
+            )?.name ??
+            null,
+          vendor_name:
+            item.vendor_name ??
+            vendorRows.find(
+              (x) =>
+                Number(x.id) ===
+                Number(item.vendor_id ?? item.global_vendor_id),
+            )?.name ??
+            null,
+          project_name:
+            item.project_name ??
+            projectRows.find(
+              (x) =>
+                Number(x.id) ===
+                Number(item.project_id ?? item.global_project_id),
+            )?.name ??
+            null,
         })) ?? [];
 
       setInvoices(mappedInvoices);
-      setClients(clientRes.data ?? []);
-      setVendors(vendorRes.data ?? []);
-      setProjects(projectRes.data ?? []);
-      setMilestones(milestoneRes.data ?? []);
-      setStatuses(statusRes.data ?? []);
+      setClients(clientRows);
+      setVendors(vendorRows);
+      setProjects(projectRows);
+      setMilestones(milestoneRows);
+      setStatuses(statusRows);
     } catch (error) {
       console.error("Failed to load invoices:", error);
       setInvoices([]);
@@ -187,9 +328,12 @@ export default function InvoicesPage() {
     return invoices.filter((item) =>
       [
         item.invoice_no,
-        item.client_name || displayName(clients, item.global_client_id),
-        item.vendor_name || displayName(vendors, item.global_vendor_id),
-        item.project_name || displayName(projects, item.global_project_id),
+        item.client_name ||
+          displayName(clients, item.client_id ?? item.global_client_id),
+        item.vendor_name ||
+          displayName(vendors, item.vendor_id ?? item.global_vendor_id),
+        item.project_name ||
+          displayName(projects, item.project_id ?? item.global_project_id),
         displayName(milestones, item.milestone_id),
         displayName(statuses, item.status_id),
         item.currency || "PKR",
@@ -242,15 +386,21 @@ export default function InvoicesPage() {
     setEditingInvoice(invoice);
     setForm({
       invoice_no: invoice.invoice_no || "",
-      client_id: invoice.global_client_id
-        ? String(invoice.global_client_id)
-        : "",
-      vendor_id: invoice.global_vendor_id
-        ? String(invoice.global_vendor_id)
-        : "",
-      project_id: invoice.global_project_id
-        ? String(invoice.global_project_id)
-        : "",
+      client_id: invoice.client_id
+        ? String(invoice.client_id)
+        : invoice.global_client_id
+          ? String(invoice.global_client_id)
+          : "",
+      vendor_id: invoice.vendor_id
+        ? String(invoice.vendor_id)
+        : invoice.global_vendor_id
+          ? String(invoice.global_vendor_id)
+          : "",
+      project_id: invoice.project_id
+        ? String(invoice.project_id)
+        : invoice.global_project_id
+          ? String(invoice.global_project_id)
+          : "",
       milestone_id: invoice.milestone_id ? String(invoice.milestone_id) : "",
       status_id: invoice.status_id ? String(invoice.status_id) : "",
       amount: String(invoice.amount || ""),
@@ -272,9 +422,9 @@ export default function InvoicesPage() {
 
       const payload = {
         invoice_no: form.invoice_no.trim(),
-        global_client_id: Number(form.client_id),
-        global_vendor_id: form.vendor_id ? Number(form.vendor_id) : null,
-        global_project_id: Number(form.project_id),
+        client_id: Number(form.client_id),
+        vendor_id: form.vendor_id ? Number(form.vendor_id) : null,
+        project_id: Number(form.project_id),
         milestone_id: form.milestone_id ? Number(form.milestone_id) : null,
         status_id: form.status_id ? Number(form.status_id) : null,
         amount: Number(form.amount || 0),
@@ -323,6 +473,228 @@ export default function InvoicesPage() {
     await loadData();
   }
 
+  function downloadCsvTemplate() {
+    const csv = buildCsv(csvTemplateRows);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "invoice_bulk_upload_template.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  async function resolveLookupId(
+    table:
+      | "invoice_clients"
+      | "invoice_vendors"
+      | "invoice_projects"
+      | "invoice_milestones"
+      | "invoice_statuses",
+    list: DropdownItem[],
+    name: string,
+    required: boolean,
+  ) {
+    const cleanName = name.trim();
+    if (!cleanName) {
+      if (required)
+        throw new Error(`Missing required lookup value for ${table}.`);
+      return { id: null, list };
+    }
+
+    const existing = list.find(
+      (item) => item.name.trim().toLowerCase() === cleanName.toLowerCase(),
+    );
+    if (existing) return { id: existing.id, list };
+
+    const { data: found, error: findError } = await supabase
+      .from(table)
+      .select("id, name")
+      .ilike("name", cleanName)
+      .maybeSingle();
+
+    if (findError) throw findError;
+    if (found?.id) {
+      const normalized = normalizeDropdownRows([found])[0];
+      return { id: normalized.id, list: [...list, normalized] };
+    }
+
+    const { data: inserted, error: insertError } = await supabase
+      .from(table)
+      .insert({ name: cleanName })
+      .select("id, name")
+      .single();
+
+    if (insertError) throw insertError;
+
+    const normalized = normalizeDropdownRows([inserted])[0];
+    return { id: normalized.id, list: [...list, normalized] };
+  }
+
+  async function handleCsvUpload(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    try {
+      setSaving(true);
+      const text = await file.text();
+      const rows = parseCsv(text);
+
+      if (rows.length === 0) {
+        alert("CSV file is empty or invalid.");
+        return;
+      }
+
+      let clientLookup = [...clients];
+      let vendorLookup = [...vendors];
+      let projectLookup = [...projects];
+      let milestoneLookup = [...milestones];
+      let statusLookup = [...statuses];
+
+      const payloads: any[] = [];
+      const skipped: string[] = [];
+
+      for (let index = 0; index < rows.length; index += 1) {
+        const row = rows[index];
+        const lineNo = index + 2;
+
+        const invoiceNo = readCsvValue(row, [
+          "invoice_no",
+          "invoice no",
+          "invoice",
+        ]);
+        const clientName = readCsvValue(row, [
+          "client_name",
+          "client name",
+          "client",
+        ]);
+        const vendorName = readCsvValue(row, [
+          "vendor_name",
+          "vendor name",
+          "vendor",
+        ]);
+        const projectName = readCsvValue(row, [
+          "project_name",
+          "project name",
+          "project",
+        ]);
+        const milestoneName = readCsvValue(row, [
+          "milestone",
+          "milestone_name",
+          "milestone name",
+        ]);
+        const statusName = readCsvValue(row, [
+          "status",
+          "status_name",
+          "status name",
+        ]);
+        const amountText = readCsvValue(row, [
+          "amount",
+          "invoice_amount",
+          "invoice amount",
+        ]);
+        const currency = readCsvValue(row, ["currency"]) || "PKR";
+        const dueDate = readCsvValue(row, ["due_date", "due date"]);
+        const paidDate = readCsvValue(row, ["paid_date", "paid date"]);
+        const notes = readCsvValue(row, ["notes", "description", "remarks"]);
+
+        if (!invoiceNo || !clientName || !projectName) {
+          skipped.push(
+            `Line ${lineNo}: invoice_no, client_name and project_name are required.`,
+          );
+          continue;
+        }
+
+        const amount = Number(String(amountText || "0").replace(/,/g, ""));
+        if (Number.isNaN(amount)) {
+          skipped.push(`Line ${lineNo}: amount is invalid.`);
+          continue;
+        }
+
+        const clientResult = await resolveLookupId(
+          "invoice_clients",
+          clientLookup,
+          clientName,
+          true,
+        );
+        clientLookup = clientResult.list;
+
+        const vendorResult = await resolveLookupId(
+          "invoice_vendors",
+          vendorLookup,
+          vendorName,
+          false,
+        );
+        vendorLookup = vendorResult.list;
+
+        const projectResult = await resolveLookupId(
+          "invoice_projects",
+          projectLookup,
+          projectName,
+          true,
+        );
+        projectLookup = projectResult.list;
+
+        const milestoneResult = await resolveLookupId(
+          "invoice_milestones",
+          milestoneLookup,
+          milestoneName,
+          false,
+        );
+        milestoneLookup = milestoneResult.list;
+
+        const statusResult = await resolveLookupId(
+          "invoice_statuses",
+          statusLookup,
+          statusName,
+          false,
+        );
+        statusLookup = statusResult.list;
+
+        payloads.push({
+          invoice_no: invoiceNo.trim(),
+          client_id: clientResult.id,
+          vendor_id: vendorResult.id,
+          project_id: projectResult.id,
+          milestone_id: milestoneResult.id,
+          status_id: statusResult.id,
+          amount,
+          currency: currency.trim().toUpperCase(),
+          due_date: normalizeDateInput(dueDate),
+          paid_date: normalizeDateInput(paidDate),
+          notes,
+        });
+      }
+
+      if (payloads.length === 0) {
+        alert(
+          `No valid invoice rows found.${skipped.length ? "\n\n" + skipped.slice(0, 8).join("\n") : ""}`,
+        );
+        return;
+      }
+
+      const { error } = await supabase.from("invoices").insert(payloads);
+      if (error) throw error;
+
+      await loadData();
+      alert(
+        `Uploaded ${payloads.length} invoice(s).${
+          skipped.length
+            ? `\nSkipped ${skipped.length} row(s):\n${skipped.slice(0, 8).join("\n")}`
+            : ""
+        }`,
+      );
+    } catch (error: any) {
+      console.error("CSV upload failed:", error);
+      alert(error?.message || "CSV upload failed.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function openDropdown(type: DropdownType) {
     setDropdownModal(type);
     setDropdownName("");
@@ -348,9 +720,9 @@ export default function InvoicesPage() {
   }
 
   function dropdownTable() {
-    if (dropdownModal === "client") return "clients";
-    if (dropdownModal === "vendor") return "vendors";
-    if (dropdownModal === "project") return "projects";
+    if (dropdownModal === "client") return "invoice_clients";
+    if (dropdownModal === "vendor") return "invoice_vendors";
+    if (dropdownModal === "project") return "invoice_projects";
     if (dropdownModal === "milestone") return "invoice_milestones";
     if (dropdownModal === "status") return "invoice_statuses";
     return "";
@@ -430,6 +802,24 @@ export default function InvoicesPage() {
             <ActionButton onClick={() => openDropdown("status")}>
               Manage Statuses
             </ActionButton>
+
+            <ActionButton onClick={downloadCsvTemplate}>
+              Download CSV Template
+            </ActionButton>
+
+            <input
+              id="invoice-csv-upload"
+              type="file"
+              accept=".csv,text/csv"
+              className="hidden"
+              onChange={handleCsvUpload}
+            />
+            <label
+              htmlFor="invoice-csv-upload"
+              className="cursor-pointer rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-bold text-slate-950 shadow-sm transition hover:bg-slate-50"
+            >
+              Upload CSV
+            </label>
 
             <button
               onClick={openAddInvoice}
@@ -518,18 +908,24 @@ export default function InvoicesPage() {
                         <Td className="font-bold">{invoice.invoice_no}</Td>
                         <Td>
                           {invoice.client_name ||
-                            invoice.client_name ||
-                            displayName(clients, invoice.global_client_id)}
+                            displayName(
+                              clients,
+                              invoice.client_id ?? invoice.global_client_id,
+                            )}
                         </Td>
                         <Td>
                           {invoice.vendor_name ||
-                            invoice.vendor_name ||
-                            displayName(vendors, invoice.global_vendor_id)}
+                            displayName(
+                              vendors,
+                              invoice.vendor_id ?? invoice.global_vendor_id,
+                            )}
                         </Td>
                         <Td>
                           {invoice.project_name ||
-                            invoice.project_name ||
-                            displayName(projects, invoice.global_project_id)}
+                            displayName(
+                              projects,
+                              invoice.project_id ?? invoice.global_project_id,
+                            )}
                         </Td>
                         <Td>{displayName(milestones, invoice.milestone_id)}</Td>
                         <Td>

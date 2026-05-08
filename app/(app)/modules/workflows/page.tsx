@@ -1,12 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-);
+import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { createClientBrowser } from "@/app/lib/supabase/browser";
 
 type Workflow = {
   id: number;
@@ -76,6 +71,7 @@ const emptyContact = {
 };
 
 export default function WorkflowsPage() {
+  const supabase = useMemo(() => createClientBrowser(), []);
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [stages, setStages] = useState<Stage[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -84,6 +80,10 @@ export default function WorkflowsPage() {
   const [priorities, setPriorities] = useState<Lookup[]>([]);
   const [statuses, setStatuses] = useState<Lookup[]>([]);
   const [selectedWorkflow, setSelectedWorkflow] = useState<number | null>(null);
+  const [currentWorkspaceId, setCurrentWorkspaceId] = useState<
+    string | number | null
+  >(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -107,54 +107,163 @@ export default function WorkflowsPage() {
 
   useEffect(() => {
     if (selectedWorkflow) loadBoard(selectedWorkflow);
-  }, [selectedWorkflow]);
+  }, [selectedWorkflow, contacts, projects, priorities, statuses]);
+
+  async function loadSessionContext() {
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    // Do not break the page on local/session hydration issues.
+    // The original page can load master data without explicitly calling getUser().
+    if (userError || !user) {
+      setCurrentUserId(null);
+      setCurrentWorkspaceId(null);
+      return { user: null, workspaceId: null };
+    }
+
+    setCurrentUserId(user.id);
+
+    const { data: memberships } = await supabase
+      .from("workspace_members")
+      .select("workspace_id, status")
+      .eq("user_id", user.id);
+
+    const activeMembership = (memberships ?? []).find(
+      (member: any) =>
+        String(member.status ?? "active")
+          .trim()
+          .toLowerCase() === "active",
+    );
+
+    const workspaceId =
+      activeMembership?.workspace_id ?? memberships?.[0]?.workspace_id ?? null;
+
+    setCurrentWorkspaceId(workspaceId);
+
+    return { user, workspaceId };
+  }
+
+  function applyWorkspaceFilter(
+    query: any,
+    workspaceId: string | number | null,
+  ) {
+    return workspaceId ? query.eq("workspace_id", workspaceId) : query;
+  }
+
+  function normalizeContactRows(rows: any[] | null | undefined): Contact[] {
+    return (rows ?? [])
+      .map((row: any) => ({
+        id: row.id,
+        full_name: String(row.full_name ?? row.name ?? "").trim(),
+        email: row.email ?? null,
+        phone: row.phone ?? null,
+        designation: row.designation ?? null,
+        company: row.company ?? null,
+        status: row.status ?? "Active",
+      }))
+      .filter((row) => row.id && row.full_name);
+  }
+
+  async function fetchMasterContacts(workspaceId: string | number | null) {
+    // Master Data source: public.contacts. Prefer the Workspora master-data
+    // column `name`; fall back to legacy `full_name` if this project still uses it.
+    let query = supabase
+      .from("contacts")
+      .select(
+        "id, name, email, phone, designation, company, status, workspace_id, created_by",
+      );
+
+    query = applyWorkspaceFilter(query, workspaceId);
+
+    const byName = await query.order("name", { ascending: true });
+    if (!byName.error)
+      return { data: normalizeContactRows(byName.data), error: null };
+
+    let legacyQuery = supabase
+      .from("contacts")
+      .select(
+        "id, full_name, email, phone, designation, company, status, workspace_id, created_by",
+      );
+
+    legacyQuery = applyWorkspaceFilter(legacyQuery, workspaceId);
+    const byFullName = await legacyQuery.order("full_name", {
+      ascending: true,
+    });
+
+    return {
+      data: normalizeContactRows(byFullName.data),
+      error: byFullName.error,
+    };
+  }
+
+  async function fetchMasterProjects(workspaceId: string | number | null) {
+    let query = supabase
+      .from("projects")
+      .select("id, name, workspace_id, created_by");
+    query = applyWorkspaceFilter(query, workspaceId);
+    return query.order("name", { ascending: true });
+  }
 
   async function loadInitial() {
     setLoading(true);
 
-    const [
-      { data: wf },
-      { data: ct },
-      { data: pr },
-      { data: st },
-      { data: pj },
-    ] = await Promise.all([
-      supabase
-        .from("workflows")
-        .select("*")
-        .order("created_at", { ascending: true }),
-      supabase
-        .from("contacts")
-        .select("id, full_name, email, phone, designation, company, status")
-        .order("full_name", { ascending: true }),
-      supabase
-        .from("workflow_priorities")
-        .select("*")
-        .order("id", { ascending: true }),
-      supabase
-        .from("workflow_task_statuses")
-        .select("*")
-        .order("id", { ascending: true }),
-      supabase
-        .from("projects")
-        .select("id, name")
-        .order("name", { ascending: true }),
-    ]);
+    try {
+      const { workspaceId } = await loadSessionContext();
 
-    setWorkflows(wf ?? []);
-    setContacts(ct ?? []);
-    setPriorities(pr ?? []);
-    setStatuses(st ?? []);
-    setProjects(pj ?? []);
+      let workflowsQuery = supabase.from("workflows").select("*");
+      workflowsQuery = applyWorkspaceFilter(workflowsQuery, workspaceId);
 
-    if (wf?.length) setSelectedWorkflow(wf[0].id);
-    setLoading(false);
+      const [
+        { data: wf, error: wfError },
+        contactsResult,
+        { data: pr, error: prError },
+        { data: st, error: stError },
+        { data: pj, error: pjError },
+      ] = await Promise.all([
+        workflowsQuery.order("created_at", { ascending: true }),
+        fetchMasterContacts(workspaceId),
+        supabase
+          .from("workflow_priorities")
+          .select("*")
+          .order("id", { ascending: true }),
+        supabase
+          .from("workflow_task_statuses")
+          .select("*")
+          .order("id", { ascending: true }),
+        fetchMasterProjects(workspaceId),
+      ]);
+
+      const firstError =
+        wfError ?? contactsResult.error ?? prError ?? stError ?? pjError;
+
+      if (firstError) {
+        console.error("Workflow dropdown load failed:", firstError);
+        alert(firstError.message || "Failed to load workflow dropdown data.");
+        return;
+      }
+
+      setWorkflows(wf ?? []);
+      setContacts(contactsResult.data ?? []);
+      setPriorities(pr ?? []);
+      setStatuses(st ?? []);
+      setProjects((pj ?? []).map((p: any) => ({ id: p.id, name: p.name })));
+
+      if (wf?.length) setSelectedWorkflow(wf[0].id);
+      else {
+        setSelectedWorkflow(null);
+        setStages([]);
+        setTasks([]);
+      }
+    } finally {
+      setLoading(false);
+    }
   }
+
   async function loadContactsOnly() {
-    const { data, error } = await supabase
-      .from("contacts")
-      .select("id, full_name, email, phone, designation, company, status")
-      .order("full_name", { ascending: true });
+    const { workspaceId } = await loadSessionContext();
+    const { data, error } = await fetchMasterContacts(workspaceId);
 
     if (error) {
       alert(error.message);
@@ -164,52 +273,309 @@ export default function WorkflowsPage() {
     setContacts(data ?? []);
   }
   async function loadBoard(workflowId: number) {
-    const [{ data: stageData }, { data: taskData }] = await Promise.all([
+    let taskQuery = supabase
+      .from("workflow_tasks")
+      .select("*")
+      .eq("workflow_id", workflowId);
+
+    if (currentWorkspaceId) {
+      taskQuery = taskQuery.eq("workspace_id", currentWorkspaceId);
+    }
+
+    const [
+      { data: stageData, error: stageError },
+      { data: taskData, error: taskError },
+    ] = await Promise.all([
       supabase
         .from("workflow_stages")
         .select("*")
         .eq("workflow_id", workflowId)
         .order("position", { ascending: true }),
-      supabase
-        .from("workflow_tasks")
-        .select(
-          `*, contacts!assigned_contact_id(full_name, designation), workflow_priorities!priority_id(name, color), workflow_task_statuses!task_status_id(name), projects!project_id(name)`,
-        )
-        .eq("workflow_id", workflowId)
-        .order("created_at", { ascending: false }),
+      taskQuery.order("created_at", { ascending: false }),
     ]);
+
+    if (stageError || taskError) {
+      console.error("Workflow board load failed:", stageError ?? taskError);
+      alert(
+        (stageError ?? taskError)?.message || "Failed to load workflow board.",
+      );
+      return;
+    }
+
+    const projectById = new Map(projects.map((p) => [Number(p.id), p]));
+    const contactById = new Map(contacts.map((c) => [Number(c.id), c]));
+    const priorityById = new Map(priorities.map((p) => [Number(p.id), p]));
+    const statusById = new Map(statuses.map((s) => [Number(s.id), s]));
 
     setStages(stageData ?? []);
     setTasks(
-      (taskData ?? []).map((t: any) => ({
-        ...t,
-        project_name: t.projects?.name ?? null,
-        contact_name: t.contacts?.full_name ?? null,
-        contact_designation: t.contacts?.designation ?? null,
-        priority_name: t.workflow_priorities?.name ?? t.priority ?? null,
-        status_name: t.workflow_task_statuses?.name ?? t.status ?? null,
-      })),
+      (taskData ?? []).map((t: any) => {
+        const project = t.project_id
+          ? projectById.get(Number(t.project_id))
+          : null;
+        const contact = t.assigned_contact_id
+          ? contactById.get(Number(t.assigned_contact_id))
+          : null;
+        const priority = t.priority_id
+          ? priorityById.get(Number(t.priority_id))
+          : null;
+        const status = t.task_status_id
+          ? statusById.get(Number(t.task_status_id))
+          : null;
+
+        return {
+          ...t,
+          project_name: project?.name ?? null,
+          contact_name: contact?.full_name ?? null,
+          contact_designation: contact?.designation ?? null,
+          priority_name: priority?.name ?? t.priority ?? null,
+          status_name: status?.name ?? t.status ?? null,
+        };
+      }),
     );
   }
 
   async function refreshLookups() {
-    const [{ data: ct }, { data: pr }, { data: st }, { data: pj }] =
-      await Promise.all([
-        supabase
-          .from("contacts")
-          .select("id, full_name, email, phone, designation, company, status")
-          .order("full_name", { ascending: true }),
+    const { workspaceId } = await loadSessionContext();
 
+    const [contactsResult, { data: pr }, { data: st }, { data: pj }] =
+      await Promise.all([
+        fetchMasterContacts(workspaceId),
         supabase.from("workflow_priorities").select("*").order("id"),
         supabase.from("workflow_task_statuses").select("*").order("id"),
-        supabase.from("projects").select("id, name").order("name"),
+        fetchMasterProjects(workspaceId),
       ]);
 
-    setContacts(ct ?? []);
+    setContacts(contactsResult.data ?? []);
     setPriorities(pr ?? []);
     setStatuses(st ?? []);
-    setProjects(pj ?? []);
-    if (selectedWorkflow) await loadBoard(selectedWorkflow);
+    setProjects((pj ?? []).map((p: any) => ({ id: p.id, name: p.name })));
+  }
+
+  const WORKFLOW_CSV_HEADERS = [
+    "task_title",
+    "project_name",
+    "description",
+    "stage",
+    "priority",
+    "status",
+    "assigned_to_email",
+    "due_date",
+  ];
+
+  function downloadWorkflowCsvTemplate() {
+    const csv = `${WORKFLOW_CSV_HEADERS.join(",")}\n`;
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = "workflow_tasks_template.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  function parseCsvLine(line: string) {
+    const result: string[] = [];
+    let current = "";
+    let insideQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      const nextChar = line[i + 1];
+
+      if (char === '"' && insideQuotes && nextChar === '"') {
+        current += '"';
+        i++;
+      } else if (char === '"') {
+        insideQuotes = !insideQuotes;
+      } else if (char === "," && !insideQuotes) {
+        result.push(current.trim());
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+
+    result.push(current.trim());
+    return result;
+  }
+
+  function findLookupId<T extends { id: number; name?: string | null }>(
+    list: T[],
+    value: string,
+  ) {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return null;
+
+    return (
+      list.find(
+        (item) =>
+          String(item.name ?? "")
+            .trim()
+            .toLowerCase() === normalized,
+      )?.id ?? null
+    );
+  }
+
+  function findContactIdByEmail(email: string) {
+    const normalized = email.trim().toLowerCase();
+    if (!normalized) return null;
+
+    return (
+      contacts.find(
+        (contact) =>
+          String(contact.email ?? "")
+            .trim()
+            .toLowerCase() === normalized,
+      )?.id ?? null
+    );
+  }
+
+  async function handleWorkflowCsvUpload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      if (!selectedWorkflow) {
+        alert("Please create or select a workflow before uploading tasks.");
+        return;
+      }
+
+      const { user, workspaceId } = await loadSessionContext();
+      if (!user) {
+        alert(
+          "User session not found. Please login again before uploading CSV.",
+        );
+        return;
+      }
+
+      const text = await file.text();
+      const lines = text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+      if (lines.length < 2) {
+        alert("CSV has headers only. Please add task rows before uploading.");
+        return;
+      }
+
+      const headers = parseCsvLine(lines[0]).map((header) =>
+        header.trim().toLowerCase(),
+      );
+
+      const missingHeaders = WORKFLOW_CSV_HEADERS.filter(
+        (header) => !headers.includes(header),
+      );
+
+      if (missingHeaders.length > 0) {
+        alert(`Missing CSV columns: ${missingHeaders.join(", ")}`);
+        return;
+      }
+
+      const getValue = (row: string[], key: string) => {
+        const index = headers.indexOf(key);
+        return index >= 0 ? row[index]?.trim() || "" : "";
+      };
+
+      const rows = lines.slice(1).map(parseCsvLine);
+
+      const invalidRows: string[] = [];
+      const payload = rows
+        .map((row, index) => {
+          const rowNumber = index + 2;
+          const title = getValue(row, "task_title");
+          const projectName = getValue(row, "project_name");
+          const stageName = getValue(row, "stage");
+          const priorityName = getValue(row, "priority");
+          const statusName = getValue(row, "status");
+          const assignedEmail = getValue(row, "assigned_to_email");
+          const dueDate = getValue(row, "due_date");
+
+          if (!title) {
+            invalidRows.push(`Row ${rowNumber}: task_title is required`);
+            return null;
+          }
+
+          const projectId = findLookupId(projects, projectName);
+          const stageId = findLookupId(stages, stageName);
+          const priorityId = findLookupId(priorities, priorityName);
+          const statusId = findLookupId(statuses, statusName);
+          const assignedContactId = findContactIdByEmail(assignedEmail);
+
+          if (projectName && !projectId) {
+            invalidRows.push(
+              `Row ${rowNumber}: project_name not found in Projects`,
+            );
+          }
+          if (stageName && !stageId) {
+            invalidRows.push(
+              `Row ${rowNumber}: stage not found in Workflow Stages`,
+            );
+          }
+          if (priorityName && !priorityId) {
+            invalidRows.push(
+              `Row ${rowNumber}: priority not found in Workflow Priorities`,
+            );
+          }
+          if (statusName && !statusId) {
+            invalidRows.push(
+              `Row ${rowNumber}: status not found in Workflow Statuses`,
+            );
+          }
+          if (assignedEmail && !assignedContactId) {
+            invalidRows.push(
+              `Row ${rowNumber}: assigned_to_email not found in Contacts`,
+            );
+          }
+
+          return {
+            workflow_id: selectedWorkflow,
+            stage_id: stageId,
+            project_id: projectId,
+            title,
+            description: getValue(row, "description") || null,
+            assigned_contact_id: assignedContactId,
+            priority_id: priorityId,
+            task_status_id: statusId,
+            priority: priorityName || null,
+            status: statusName || null,
+            due_date: dueDate || null,
+            workspace_id: workspaceId,
+            created_by: user.id,
+          };
+        })
+        .filter(Boolean);
+
+      if (invalidRows.length > 0) {
+        alert(
+          `CSV upload stopped. Fix these issues:\n\n${invalidRows.slice(0, 12).join("\n")}`,
+        );
+        return;
+      }
+
+      if (payload.length === 0) {
+        alert("No valid task rows found in CSV.");
+        return;
+      }
+
+      const { error } = await supabase.from("workflow_tasks").insert(payload);
+      if (error) {
+        console.error(error);
+        alert(error.message || "Failed to upload workflow tasks.");
+        return;
+      }
+
+      alert(`${payload.length} workflow tasks uploaded successfully.`);
+      event.target.value = "";
+      await loadBoard(selectedWorkflow);
+    } catch (error: any) {
+      console.error(error);
+      alert(error?.message || "CSV upload failed.");
+    }
   }
 
   const filteredTasks = useMemo(() => {
@@ -288,6 +654,8 @@ export default function WorkflowsPage() {
     if (!selectedWorkflow) return alert("Please select a workflow.");
     if (!taskForm.title.trim()) return alert("Task title is required.");
 
+    const { user, workspaceId } = await loadSessionContext();
+
     const selectedPriority = priorities.find(
       (x) => String(x.id) === taskForm.priority_id,
     );
@@ -311,6 +679,8 @@ export default function WorkflowsPage() {
       priority: selectedPriority?.name ?? null,
       status: selectedStatus?.name ?? null,
       due_date: taskForm.due_date || null,
+      ...(workspaceId ? { workspace_id: workspaceId } : {}),
+      ...(user?.id ? { created_by: user.id } : {}),
     };
 
     const { error } = editingTaskId
@@ -432,21 +802,49 @@ export default function WorkflowsPage() {
   async function saveContact() {
     if (!contactForm.full_name.trim())
       return alert("Contact name is required.");
-    const payload = {
+
+    const { user, workspaceId } = await loadSessionContext();
+
+    const masterPayload = {
+      name: contactForm.full_name.trim(),
+      email: contactForm.email.trim() || null,
+      phone: contactForm.phone.trim() || null,
+      designation: contactForm.designation.trim() || null,
+      company: contactForm.company.trim() || null,
+      status: contactForm.status || "Active",
+      ...(workspaceId ? { workspace_id: workspaceId } : {}),
+      ...(user?.id ? { created_by: user.id } : {}),
+    };
+
+    const legacyPayload = {
       full_name: contactForm.full_name.trim(),
       email: contactForm.email.trim() || null,
       phone: contactForm.phone.trim() || null,
       designation: contactForm.designation.trim() || null,
       company: contactForm.company.trim() || null,
       status: contactForm.status || "Active",
+      ...(workspaceId ? { workspace_id: workspaceId } : {}),
+      ...(user?.id ? { created_by: user.id } : {}),
     };
-    const { error } = editingContactId
+
+    const result = editingContactId
       ? await supabase
           .from("contacts")
-          .update(payload)
+          .update(masterPayload)
           .eq("id", editingContactId)
-      : await supabase.from("contacts").insert(payload);
-    if (error) return alert(error.message);
+      : await supabase.from("contacts").insert(masterPayload);
+
+    if (result.error) {
+      const fallbackResult = editingContactId
+        ? await supabase
+            .from("contacts")
+            .update(legacyPayload)
+            .eq("id", editingContactId)
+        : await supabase.from("contacts").insert(legacyPayload);
+
+      if (fallbackResult.error) return alert(fallbackResult.error.message);
+    }
+
     setContactForm(emptyContact);
     setEditingContactId(null);
     await refreshLookups();
@@ -514,6 +912,18 @@ export default function WorkflowsPage() {
             <button onClick={() => openManage("contact")} className="btn-white">
               Manage Contacts
             </button>
+            <button onClick={downloadWorkflowCsvTemplate} className="btn-white">
+              Download CSV Template
+            </button>
+            <label className="btn-white cursor-pointer">
+              Upload CSV
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                onChange={handleWorkflowCsvUpload}
+                className="hidden"
+              />
+            </label>
             <button onClick={() => openAddTask()} className="btn-green">
               + Add Task
             </button>
@@ -626,7 +1036,12 @@ export default function WorkflowsPage() {
                 setTaskForm({ ...taskForm, assigned_contact_id: v })
               }
               options={contacts
-                .filter((c) => c.status === "Active")
+                .filter(
+                  (c) =>
+                    String(c.status ?? "active")
+                      .trim()
+                      .toLowerCase() === "active",
+                )
                 .map((c) => ({
                   value: String(c.id),
                   label: `${c.full_name}${c.designation ? ` - ${c.designation}` : ""}`,
