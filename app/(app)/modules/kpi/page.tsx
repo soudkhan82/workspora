@@ -14,6 +14,8 @@ type KPI = {
   due_date: string | null;
   detail: string | null;
   created_at: string;
+  updated_at?: string | null;
+  local_updated_at?: string | null;
   workspace_id?: string | null;
   created_by?: string | null;
 };
@@ -40,6 +42,8 @@ const FALLBACK_CATEGORIES = [
   "Other",
 ];
 
+const KPI_EDIT_PIN_STORAGE_KEY = "workspora:kpi-edited-pins";
+
 const KPI_UNITS = [
   "PKR",
   "USD",
@@ -63,8 +67,8 @@ const KPI_UNITS = [
 export default function KPIPage() {
   const supabase = useMemo(() => createClientBrowser(), []);
 
-  const [sortKey, setSortKey] = useState<keyof KPI>("created_at");
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [sortKey, setSortKey] = useState<keyof KPI>("due_date");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [kpis, setKpis] = useState<KPI[]>([]);
   const [categories, setCategories] = useState<KpiCategory[]>([]);
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
@@ -207,11 +211,26 @@ export default function KPIPage() {
     const scopedCtx = currentCtx ?? (await getWorkspaceContext());
     if (!scopedCtx) return;
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("kpis")
       .select("*")
       .eq("workspace_id", scopedCtx.workspaceId)
+      .order("due_date", { ascending: true, nullsFirst: false })
       .order("created_at", { ascending: false });
+
+    // Fallback for older databases where updated_at has not been added yet.
+    // The page still works, but for persistent "recently updated first" ordering,
+    // add the updated_at column/trigger in Supabase.
+    if (error && isMissingUpdatedAtColumn(error.message)) {
+      const fallback = await supabase
+        .from("kpis")
+        .select("*")
+        .eq("workspace_id", scopedCtx.workspaceId)
+        .order("created_at", { ascending: false });
+
+      data = fallback.data;
+      error = fallback.error;
+    }
 
     if (error) {
       alert(error.message);
@@ -219,7 +238,7 @@ export default function KPIPage() {
       return;
     }
 
-    setKpis((data ?? []) as KPI[]);
+    setKpis(applyLocalEditPins((data ?? []) as KPI[]));
   }
 
   function updateForm(key: string, value: string) {
@@ -262,10 +281,12 @@ export default function KPIPage() {
       detail: form.detail.trim() || null,
     };
 
-    const result = editingId
+    const now = new Date().toISOString();
+
+    let result = editingId
       ? await supabase
           .from("kpis")
-          .update(payload)
+          .update({ ...payload, updated_at: now })
           .eq("id", editingId)
           .eq("workspace_id", currentCtx.workspaceId)
       : await supabase.from("kpis").insert({
@@ -274,11 +295,40 @@ export default function KPIPage() {
           created_by: currentCtx.userId,
         });
 
+    // Fallback so this page remains drop-in compatible even before the DB
+    // updated_at migration is applied.
+    if (
+      editingId &&
+      result.error &&
+      isMissingUpdatedAtColumn(result.error.message)
+    ) {
+      result = await supabase
+        .from("kpis")
+        .update(payload)
+        .eq("id", editingId)
+        .eq("workspace_id", currentCtx.workspaceId);
+    }
+
     setSaving(false);
 
     if (result.error) {
       alert(result.error.message);
       return;
+    }
+
+    if (editingId) {
+      saveLocalEditPin(editingId, now);
+
+      // Immediate UI feedback: move the edited KPI to the top even before reload.
+      setKpis((prev) =>
+        sortByLatestActivity(
+          prev.map((item) =>
+            item.id === editingId
+              ? { ...item, ...payload, updated_at: now, local_updated_at: now }
+              : item,
+          ),
+        ),
+      );
     }
 
     resetForm();
@@ -409,6 +459,18 @@ export default function KPIPage() {
     ).sort((a, b) => a.localeCompare(b));
   }, [categories, kpis]);
 
+  function handleSortOption(value: string) {
+    const [nextKey, nextDirection] = value.split(":") as [
+      keyof KPI,
+      "asc" | "desc",
+    ];
+
+    setSortKey(nextKey);
+    setSortDirection(nextDirection);
+  }
+
+  const sortOptionValue = `${sortKey}:${sortDirection}`;
+
   const filteredKpis = useMemo(() => {
     const filtered = kpis.filter((item) => {
       const searchText = `${item.title} ${item.category || ""} ${
@@ -418,36 +480,9 @@ export default function KPIPage() {
       return searchText.includes(search.toLowerCase());
     });
 
-    return [...filtered].sort((a, b) => {
-      const aValue = a[sortKey];
-      const bValue = b[sortKey];
-
-      if (sortKey === "current_value") {
-        const aProgress =
-          Number(a.target_value) > 0
-            ? (Number(a.current_value) / Number(a.target_value)) * 100
-            : 0;
-
-        const bProgress =
-          Number(b.target_value) > 0
-            ? (Number(b.current_value) / Number(b.target_value)) * 100
-            : 0;
-
-        return sortDirection === "asc"
-          ? aProgress - bProgress
-          : bProgress - aProgress;
-      }
-
-      if (sortKey === "target_value") {
-        return sortDirection === "asc"
-          ? Number(a.target_value) - Number(b.target_value)
-          : Number(b.target_value) - Number(a.target_value);
-      }
-
-      return sortDirection === "asc"
-        ? String(aValue || "").localeCompare(String(bValue || ""))
-        : String(bValue || "").localeCompare(String(aValue || ""));
-    });
+    return [...filtered].sort((a, b) =>
+      compareKpis(a, b, sortKey, sortDirection),
+    );
   }, [kpis, search, sortKey, sortDirection]);
 
   const stats = useMemo(() => {
@@ -669,7 +704,40 @@ export default function KPIPage() {
               </div>
             </div>
 
-            <div className="flex justify-end">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <span className="text-sm font-semibold text-slate-600">
+                  Sort list by
+                </span>
+                <select
+                  value={sortOptionValue}
+                  onChange={(e) => handleSortOption(e.target.value)}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 outline-none focus:border-green-500"
+                >
+                  <option value="due_date:asc">Due date - nearest first</option>
+                  <option value="due_date:desc">Due date - latest first</option>
+                  <option value="updated_at:desc">
+                    Recently updated first
+                  </option>
+                  <option value="created_at:desc">
+                    Recently created first
+                  </option>
+                  <option value="title:asc">KPI title A-Z</option>
+                  <option value="title:desc">KPI title Z-A</option>
+                  <option value="current_value:desc">
+                    Progress - highest first
+                  </option>
+                  <option value="current_value:asc">
+                    Progress - lowest first
+                  </option>
+                  <option value="status:asc">Status A-Z</option>
+                  <option value="status:desc">Status Z-A</option>
+                </select>
+                <span className="text-xs text-slate-500">
+                  Edited KPIs are kept at the top.
+                </span>
+              </div>
+
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -1042,6 +1110,155 @@ function CategoryManagerModal({
       </div>
     </div>
   );
+}
+
+function isMissingUpdatedAtColumn(message: string) {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("updated_at") &&
+    (normalized.includes("column") || normalized.includes("schema cache"))
+  );
+}
+
+function readLocalEditPins() {
+  if (typeof window === "undefined") return {} as Record<string, string>;
+
+  try {
+    const raw = window.localStorage.getItem(KPI_EDIT_PIN_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, string>) : {};
+  } catch {
+    return {} as Record<string, string>;
+  }
+}
+
+function saveLocalEditPin(id: string, timestamp: string) {
+  if (typeof window === "undefined") return;
+
+  const pins = readLocalEditPins();
+  pins[id] = timestamp;
+  window.localStorage.setItem(KPI_EDIT_PIN_STORAGE_KEY, JSON.stringify(pins));
+}
+
+function applyLocalEditPins(items: KPI[]) {
+  const pins = readLocalEditPins();
+
+  return items.map((item) => ({
+    ...item,
+    local_updated_at: pins[item.id] || item.local_updated_at || null,
+  }));
+}
+
+function getTime(value?: string | null) {
+  return value ? new Date(value).getTime() || 0 : 0;
+}
+
+function getLatestActivityTime(kpi: KPI) {
+  return (
+    getTime(kpi.local_updated_at) ||
+    getTime(kpi.updated_at) ||
+    getTime(kpi.created_at)
+  );
+}
+
+function wasKpiEdited(kpi: KPI) {
+  const localUpdatedAt = getTime(kpi.local_updated_at);
+  if (localUpdatedAt) return true;
+
+  const updatedAt = getTime(kpi.updated_at);
+  const createdAt = getTime(kpi.created_at);
+
+  if (!updatedAt || !createdAt) return false;
+
+  // Avoid treating rows as "edited" when updated_at was backfilled/defaulted
+  // to the same value as created_at. Any real edit gets a newer timestamp.
+  return updatedAt - createdAt > 1000;
+}
+
+function sortByLatestActivity(items: KPI[]) {
+  return [...items].sort((a, b) => {
+    const editedDiff = Number(wasKpiEdited(b)) - Number(wasKpiEdited(a));
+    if (editedDiff !== 0) return editedDiff;
+
+    const latestDiff = getLatestActivityTime(b) - getLatestActivityTime(a);
+    if (latestDiff !== 0) return latestDiff;
+
+    return String(b.created_at || "").localeCompare(String(a.created_at || ""));
+  });
+}
+
+function compareDateValue(
+  aValue: string | null | undefined,
+  bValue: string | null | undefined,
+  sortDirection: "asc" | "desc",
+) {
+  const aTime = getTime(aValue);
+  const bTime = getTime(bValue);
+
+  if (!aTime && !bTime) return 0;
+  if (!aTime) return 1;
+  if (!bTime) return -1;
+
+  return sortDirection === "asc" ? aTime - bTime : bTime - aTime;
+}
+
+function compareKpis(
+  a: KPI,
+  b: KPI,
+  sortKey: keyof KPI,
+  sortDirection: "asc" | "desc",
+) {
+  // Business rule: whenever a KPI is edited, keep it above normal due-date order.
+  const editedDiff = Number(wasKpiEdited(b)) - Number(wasKpiEdited(a));
+  if (editedDiff !== 0) return editedDiff;
+
+  if (sortKey === "updated_at" || sortKey === "created_at") {
+    const aTime =
+      sortKey === "updated_at"
+        ? getLatestActivityTime(a)
+        : getTime(a.created_at);
+    const bTime =
+      sortKey === "updated_at"
+        ? getLatestActivityTime(b)
+        : getTime(b.created_at);
+
+    return sortDirection === "asc" ? aTime - bTime : bTime - aTime;
+  }
+
+  if (sortKey === "due_date") {
+    const dateDiff = compareDateValue(a.due_date, b.due_date, sortDirection);
+    if (dateDiff !== 0) return dateDiff;
+
+    return getLatestActivityTime(b) - getLatestActivityTime(a);
+  }
+
+  if (sortKey === "current_value") {
+    const aProgress =
+      Number(a.target_value) > 0
+        ? (Number(a.current_value) / Number(a.target_value)) * 100
+        : 0;
+
+    const bProgress =
+      Number(b.target_value) > 0
+        ? (Number(b.current_value) / Number(b.target_value)) * 100
+        : 0;
+
+    return sortDirection === "asc"
+      ? aProgress - bProgress
+      : bProgress - aProgress;
+  }
+
+  if (sortKey === "target_value") {
+    return sortDirection === "asc"
+      ? Number(a.target_value) - Number(b.target_value)
+      : Number(b.target_value) - Number(a.target_value);
+  }
+
+  const aValue = a[sortKey];
+  const bValue = b[sortKey];
+
+  return sortDirection === "asc"
+    ? String(aValue || "").localeCompare(String(bValue || ""))
+    : String(bValue || "").localeCompare(String(aValue || ""));
 }
 
 function StatCard({ title, value }: { title: string; value: string | number }) {
