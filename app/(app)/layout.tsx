@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 import TopBar from "./components/TopBar";
 import MasterDataManager from "./components/MasterDataManager";
 
@@ -22,9 +23,29 @@ export default function AppShellLayout({
   return (
     <div className="flex min-h-screen bg-slate-100">
       <aside className="hidden w-72 shrink-0 border-r border-slate-200 bg-white md:block">
-        <div className="border-b border-slate-200 p-6">
-          <h2 className="text-xl font-bold text-emerald-600">Workspora</h2>
-          <p className="mt-1 text-xs text-slate-500">Modular SaaS Workspace</p>
+        <div className="border-b border-slate-200 px-5 py-5">
+          <div className="flex items-center gap-4">
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-3xl bg-white shadow-md ring-1 ring-slate-200">
+              <Image
+                src="/logo.png"
+                alt="Workspora logo"
+                width={64}
+                height={64}
+                priority
+                className="h-14 w-14 object-contain"
+              />
+            </div>
+
+            <div className="min-w-0">
+              <h2 className="font-serif text-2xl font-extrabold tracking-tight text-slate-950">
+                Workspora
+              </h2>
+
+              <p className="mt-0.5 text-[12px] font-semibold uppercase tracking-[0.18em] text-emerald-600">
+                Effortless Flow
+              </p>
+            </div>
+          </div>
         </div>
 
         <nav className="space-y-1 p-4">
