@@ -140,6 +140,7 @@ export default function PurchaseOrdersPage() {
   const [loading, setLoading] = useState(true);
 
   const [showPoModal, setShowPoModal] = useState(false);
+  const [reportPo, setReportPo] = useState<PoGroup | null>(null);
   const [dropdownModal, setDropdownModal] = useState<DropdownType | null>(null);
   const [dropdownName, setDropdownName] = useState("");
   const [editingDropdownId, setEditingDropdownId] = useState<number | null>(
@@ -552,6 +553,14 @@ export default function PurchaseOrdersPage() {
     );
 
     setShowPoModal(true);
+  }
+
+  function openPoReport(group: PoGroup) {
+    setReportPo(group);
+  }
+
+  function closePoReport() {
+    setReportPo(null);
   }
 
   function addLineRow() {
@@ -1359,6 +1368,12 @@ export default function PurchaseOrdersPage() {
                     <Td align="right">
                       <div className="flex justify-end gap-2">
                         <button
+                          onClick={() => openPoReport(po)}
+                          className="reportBtn"
+                        >
+                          View Report
+                        </button>
+                        <button
                           onClick={() => openEditPo(po)}
                           className="editBtn"
                         >
@@ -1899,6 +1914,14 @@ export default function PurchaseOrdersPage() {
         </Modal>
       )}
 
+      {reportPo && (
+        <PurchaseOrderReportModal
+          group={reportPo}
+          onClose={closePoReport}
+          formatNumber={formatNumber}
+        />
+      )}
+
       <style jsx>{`
         .topBtn {
           border-radius: 0.75rem;
@@ -1911,6 +1934,18 @@ export default function PurchaseOrdersPage() {
         }
         .topBtn:hover {
           background: rgb(248 250 252);
+        }
+        .reportBtn {
+          border-radius: 0.5rem;
+          border: 1px solid rgb(16 185 129);
+          background: rgb(236 253 245);
+          padding: 0.5rem 0.75rem;
+          font-size: 0.75rem;
+          font-weight: 800;
+          color: rgb(4 120 87);
+        }
+        .reportBtn:hover {
+          background: rgb(209 250 229);
         }
         .editBtn {
           border-radius: 0.5rem;
@@ -2334,6 +2369,294 @@ function Select({
           </option>
         ))}
       </select>
+    </div>
+  );
+}
+
+function PurchaseOrderReportModal({
+  group,
+  onClose,
+  formatNumber,
+}: {
+  group: PoGroup;
+  onClose: () => void;
+  formatNumber: (value: number) => string;
+}) {
+  const printAreaId = "po-report-print-area";
+  const first = group.rows[0];
+  const generatedOn = new Date().toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+
+  function printReport() {
+    const originalTitle = document.title;
+    document.title = `Purchase Order ${group.po_no}`;
+    window.print();
+    document.title = originalTitle;
+  }
+
+  function reportDate(value?: string | null) {
+    if (!value) return "—";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleDateString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+  }
+
+  return (
+    <div className="fixed inset-0 z-[90] bg-slate-950/70 px-4 py-5 backdrop-blur-sm print:static print:bg-white print:p-0">
+      <div className="mx-auto flex h-full max-w-6xl flex-col gap-3 print:block print:h-auto print:max-w-none">
+        <div className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-950 px-5 py-4 shadow-2xl print:hidden">
+          <div>
+            <h2 className="text-xl font-extrabold text-white">
+              Purchase Order Report
+            </h2>
+            <p className="mt-1 text-xs font-semibold text-slate-400">
+              Tight A4 report preview for {group.po_no}. Use Download PDF and
+              choose Save as PDF.
+            </p>
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              onClick={printReport}
+              className="rounded-xl bg-emerald-500 px-5 py-3 text-sm font-extrabold text-slate-950 shadow-sm hover:bg-emerald-400"
+            >
+              Download PDF
+            </button>
+            <button
+              onClick={onClose}
+              className="rounded-xl border border-slate-700 bg-slate-900 px-5 py-3 text-sm font-extrabold text-white hover:bg-slate-800"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-auto rounded-2xl border border-slate-800 bg-slate-950 p-4 print:block print:overflow-visible print:rounded-none print:border-0 print:bg-white print:p-0">
+          <div
+            id={printAreaId}
+            className="mx-auto w-full max-w-[794px] bg-white p-8 text-slate-950 shadow-2xl print:max-w-none print:p-0 print:shadow-none"
+          >
+            <div className="mb-5 flex items-start justify-between border-b-2 border-slate-950 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-950 text-xl font-black text-emerald-400">
+                  W
+                </div>
+                <div>
+                  <h1 className="text-2xl font-black tracking-tight text-slate-950">
+                    Workspora
+                  </h1>
+                  <p className="mt-1 text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">
+                    Purchase Order Report
+                  </p>
+                </div>
+              </div>
+
+              <div className="text-right">
+                <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">
+                  PO Number
+                </div>
+                <div className="mt-1 text-xl font-black text-slate-950">
+                  {group.po_no}
+                </div>
+                <div className="mt-2 inline-flex rounded-full bg-slate-100 px-3 py-1 text-[10px] font-black uppercase text-slate-700">
+                  {group.status || "No Status"}
+                </div>
+              </div>
+            </div>
+
+            <div className="mb-5 grid grid-cols-2 gap-4 text-[11px] leading-tight">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <div className="mb-2 text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                  Vendor / Project
+                </div>
+                <div className="grid grid-cols-[95px_1fr] gap-y-1.5">
+                  <div className="font-bold text-slate-500">Vendor</div>
+                  <div className="font-black text-slate-950">
+                    {group.vendor_name || "Not Applicable"}
+                  </div>
+                  <div className="font-bold text-slate-500">Project</div>
+                  <div className="font-semibold text-slate-900">
+                    {group.project_name || "—"}
+                  </div>
+                  <div className="font-bold text-slate-500">Currency</div>
+                  <div className="font-semibold text-slate-900">
+                    {group.currency || "PKR"}
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <div className="mb-2 text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                  Order Details
+                </div>
+                <div className="grid grid-cols-[105px_1fr] gap-y-1.5">
+                  <div className="font-bold text-slate-500">PO Date</div>
+                  <div className="font-semibold text-slate-900">
+                    {reportDate(group.po_date)}
+                  </div>
+                  <div className="font-bold text-slate-500">Delivery Date</div>
+                  <div className="font-semibold text-slate-900">
+                    {reportDate(first?.delivery_date)}
+                  </div>
+                  <div className="font-bold text-slate-500">Line Items</div>
+                  <div className="font-semibold text-slate-900">
+                    {group.rowCount}
+                  </div>
+                  <div className="font-bold text-slate-500">Generated</div>
+                  <div className="font-semibold text-slate-900">
+                    {generatedOn}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mb-5 overflow-hidden rounded-xl border border-slate-300">
+              <table className="w-full border-collapse text-[10.5px] leading-tight">
+                <thead>
+                  <tr className="bg-slate-950 text-white">
+                    <th className="w-8 px-2 py-2 text-left font-black uppercase">
+                      #
+                    </th>
+                    <th className="w-24 px-2 py-2 text-left font-black uppercase">
+                      Code
+                    </th>
+                    <th className="px-2 py-2 text-left font-black uppercase">
+                      Item Description
+                    </th>
+                    <th className="w-16 px-2 py-2 text-left font-black uppercase">
+                      UOM
+                    </th>
+                    <th className="w-16 px-2 py-2 text-right font-black uppercase">
+                      Qty
+                    </th>
+                    <th className="w-24 px-2 py-2 text-right font-black uppercase">
+                      Unit Price
+                    </th>
+                    <th className="w-28 px-2 py-2 text-right font-black uppercase">
+                      Amount
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {group.rows.map((row, index) => {
+                    const qty = Number(row.quantity || 0);
+                    const unitPrice = Number(row.unit_price || 0);
+                    const amount = qty * unitPrice;
+
+                    return (
+                      <tr
+                        key={row.id || `${row.po_no}-${index}`}
+                        className="border-b border-slate-200"
+                      >
+                        <td className="px-2 py-2 font-bold text-slate-600">
+                          {index + 1}
+                        </td>
+                        <td className="px-2 py-2 font-bold text-slate-800">
+                          {row.line_code || "—"}
+                        </td>
+                        <td className="px-2 py-2 font-semibold text-slate-950">
+                          {row.line_item || "—"}
+                        </td>
+                        <td className="px-2 py-2 font-semibold text-slate-700">
+                          {row.unit_of_measurement || "—"}
+                        </td>
+                        <td className="px-2 py-2 text-right font-semibold text-slate-800">
+                          {formatNumber(qty)}
+                        </td>
+                        <td className="px-2 py-2 text-right font-semibold text-slate-800">
+                          {formatNumber(unitPrice)}
+                        </td>
+                        <td className="px-2 py-2 text-right font-black text-slate-950">
+                          {group.currency} {formatNumber(amount)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mb-5 flex justify-end">
+              <div className="w-72 rounded-xl border border-slate-300 bg-slate-50 p-3 text-[11px]">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                  <span className="font-bold text-slate-500">Subtotal</span>
+                  <span className="font-black text-slate-950">
+                    {group.currency} {formatNumber(group.total)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between pt-2">
+                  <span className="text-sm font-black text-slate-950">
+                    Grand Total
+                  </span>
+                  <span className="text-sm font-black text-emerald-700">
+                    {group.currency} {formatNumber(group.total)}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mb-6 rounded-xl border border-slate-200 bg-slate-50 p-3 text-[11px]">
+              <div className="mb-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
+                Notes / Remarks
+              </div>
+              <p className="min-h-8 font-medium leading-relaxed text-slate-700">
+                {first?.notes || "No additional remarks provided."}
+              </p>
+            </div>
+
+            <div className="mt-8 grid grid-cols-2 gap-8 text-[10px]">
+              <div>
+                <div className="h-12 border-b border-slate-400" />
+                <div className="mt-2 text-center font-black uppercase tracking-[0.16em] text-slate-500">
+                  Prepared By
+                </div>
+              </div>
+              <div>
+                <div className="h-12 border-b border-slate-400" />
+                <div className="mt-2 text-center font-black uppercase tracking-[0.16em] text-slate-500">
+                  Approved By
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-8 border-t border-slate-200 pt-3 text-center text-[10px] font-semibold text-slate-400">
+              This is a system-generated purchase order report from Workspora.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <style jsx global>{`
+        @media print {
+          @page {
+            size: A4;
+            margin: 10mm;
+          }
+
+          body * {
+            visibility: hidden !important;
+          }
+
+          #${printAreaId}, #${printAreaId} * {
+            visibility: visible !important;
+          }
+
+          #${printAreaId} {
+            position: absolute !important;
+            inset: 0 auto auto 0 !important;
+            width: 100% !important;
+            max-width: none !important;
+            box-shadow: none !important;
+          }
+        }
+      `}</style>
     </div>
   );
 }
