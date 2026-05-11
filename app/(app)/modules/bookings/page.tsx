@@ -27,6 +27,8 @@ type Booking = {
   booking_no: string | null;
   client_id: Id | null;
   project_id: Id | null;
+  global_client_id: Id | null;
+  global_project_id: Id | null;
   booking_type_id: Id | null;
   status_id: Id | null;
   assigned_contact_id: Id | null;
@@ -90,12 +92,24 @@ const emptyForm: FormState = {
 
 const dropdownConfig: Record<
   DropdownType,
-  { title: string; table: string; stateKey: "clients" | "projects" | "types" | "statuses" }
+  {
+    title: string;
+    table: string;
+    stateKey: "clients" | "projects" | "types" | "statuses";
+  }
 > = {
-  client: { title: "Booking Clients", table: "booking_clients", stateKey: "clients" },
-  project: { title: "Booking Projects", table: "booking_projects", stateKey: "projects" },
+  client: { title: "Global Clients", table: "clients", stateKey: "clients" },
+  project: {
+    title: "Global Projects",
+    table: "projects",
+    stateKey: "projects",
+  },
   type: { title: "Booking Types", table: "booking_types", stateKey: "types" },
-  status: { title: "Booking Statuses", table: "booking_statuses", stateKey: "statuses" },
+  status: {
+    title: "Booking Statuses",
+    table: "booking_statuses",
+    stateKey: "statuses",
+  },
 };
 
 export default function BookingsPage() {
@@ -113,7 +127,9 @@ export default function BookingsPage() {
 
   const [form, setForm] = useState<FormState>(emptyForm);
   const [editingId, setEditingId] = useState<Id | null>(null);
-  const [selectedBooking, setSelectedBooking] = useState<BookingRow | null>(null);
+  const [selectedBooking, setSelectedBooking] = useState<BookingRow | null>(
+    null,
+  );
 
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -164,12 +180,18 @@ export default function BookingsPage() {
       return null;
     }
 
-    if (membership.status && String(membership.status).toLowerCase() !== "active") {
+    if (
+      membership.status &&
+      String(membership.status).toLowerCase() !== "active"
+    ) {
       setContextError("Your workspace membership is not active.");
       return null;
     }
 
-    const nextCtx = { userId: user.id, workspaceId: membership.workspace_id as string };
+    const nextCtx = {
+      userId: user.id,
+      workspaceId: membership.workspace_id as string,
+    };
     setCtx(nextCtx);
     setContextError("");
     return nextCtx;
@@ -200,7 +222,7 @@ export default function BookingsPage() {
     const { data, error } = await supabase
       .from("bookings")
       .select(
-        "id,booking_no,client_id,project_id,booking_type_id,status_id,assigned_contact_id,booking_date,start_time,end_time,location,assigned_to,notes,created_at,workspace_id,created_by",
+        "id,booking_no,client_id,project_id,global_client_id,global_project_id,booking_type_id,status_id,assigned_contact_id,booking_date,start_time,end_time,location,assigned_to,notes,created_at,workspace_id,created_by",
       )
       .eq("workspace_id", currentCtx.workspaceId)
       .order("booking_date", { ascending: true, nullsFirst: false })
@@ -237,11 +259,11 @@ export default function BookingsPage() {
   }
 
   async function loadClients(currentCtx = ctx) {
-    await loadDropdownTable("booking_clients", setClients, currentCtx);
+    await loadDropdownTable("clients", setClients, currentCtx);
   }
 
   async function loadProjects(currentCtx = ctx) {
-    await loadDropdownTable("booking_projects", setProjects, currentCtx);
+    await loadDropdownTable("projects", setProjects, currentCtx);
   }
 
   async function loadTypes(currentCtx = ctx) {
@@ -257,7 +279,9 @@ export default function BookingsPage() {
 
     const { data, error } = await supabase
       .from("contacts")
-      .select("id,full_name,email,phone,designation,company,status,workspace_id")
+      .select(
+        "id,full_name,email,phone,designation,company,status,workspace_id",
+      )
       .eq("workspace_id", currentCtx.workspaceId)
       .order("full_name", { ascending: true, nullsFirst: false });
 
@@ -274,18 +298,33 @@ export default function BookingsPage() {
   const projectMap = useMemo(() => makeNameMap(projects), [projects]);
   const typeMap = useMemo(() => makeNameMap(types), [types]);
   const statusMap = useMemo(() => makeNameMap(statuses), [statuses]);
-  const contactMap = useMemo(() => new Map(contacts.map((x) => [x.id, x])), [contacts]);
+  const contactMap = useMemo(
+    () => new Map(contacts.map((x) => [x.id, x])),
+    [contacts],
+  );
 
   const bookingRows = useMemo<BookingRow[]>(() => {
     return bookings.map((b) => {
-      const contact = b.assigned_contact_id ? contactMap.get(b.assigned_contact_id) : null;
+      const contact = b.assigned_contact_id
+        ? contactMap.get(b.assigned_contact_id)
+        : null;
 
       return {
         ...b,
-        client_name: b.client_id ? clientMap.get(b.client_id) ?? "-" : "-",
-        project_name: b.project_id ? projectMap.get(b.project_id) ?? "-" : "-",
-        booking_type: b.booking_type_id ? typeMap.get(b.booking_type_id) ?? "-" : "-",
-        status: b.status_id ? statusMap.get(b.status_id) ?? "-" : "-",
+        client_name: b.global_client_id
+          ? (clientMap.get(b.global_client_id) ?? "-")
+          : b.client_id
+            ? (clientMap.get(b.client_id) ?? "-")
+            : "-",
+        project_name: b.global_project_id
+          ? (projectMap.get(b.global_project_id) ?? "-")
+          : b.project_id
+            ? (projectMap.get(b.project_id) ?? "-")
+            : "-",
+        booking_type: b.booking_type_id
+          ? (typeMap.get(b.booking_type_id) ?? "-")
+          : "-",
+        status: b.status_id ? (statusMap.get(b.status_id) ?? "-") : "-",
         assigned_contact_name: contact?.full_name ?? b.assigned_to ?? "-",
         assigned_contact_email: contact?.email ?? "",
         assigned_contact_phone: contact?.phone ?? "",
@@ -300,7 +339,9 @@ export default function BookingsPage() {
       const aDate = a.booking_date || "9999-12-31";
       const bDate = b.booking_date || "9999-12-31";
       if (aDate !== bDate) return aDate.localeCompare(bDate);
-      return String(b.created_at ?? "").localeCompare(String(a.created_at ?? ""));
+      return String(b.created_at ?? "").localeCompare(
+        String(a.created_at ?? ""),
+      );
     });
 
     if (!q) return rows;
@@ -330,9 +371,13 @@ export default function BookingsPage() {
   const summary = useMemo(() => {
     const total = bookingRows.length;
     const scheduled = bookingRows.filter((b) =>
-      ["scheduled", "confirmed", "pending", "active"].includes(String(b.status ?? "").toLowerCase()),
+      ["scheduled", "confirmed", "pending", "active"].includes(
+        String(b.status ?? "").toLowerCase(),
+      ),
     ).length;
-    const completed = bookingRows.filter((b) => String(b.status ?? "").toLowerCase() === "completed").length;
+    const completed = bookingRows.filter(
+      (b) => String(b.status ?? "").toLowerCase() === "completed",
+    ).length;
     const cancelled = bookingRows.filter((b) =>
       ["cancelled", "canceled"].includes(String(b.status ?? "").toLowerCase()),
     ).length;
@@ -354,11 +399,21 @@ export default function BookingsPage() {
     setEditingId(item.id);
     setForm({
       booking_no: item.booking_no ?? "",
-      client_id: item.client_id ? String(item.client_id) : "",
-      project_id: item.project_id ? String(item.project_id) : "",
+      client_id: item.global_client_id
+        ? String(item.global_client_id)
+        : item.client_id
+          ? String(item.client_id)
+          : "",
+      project_id: item.global_project_id
+        ? String(item.global_project_id)
+        : item.project_id
+          ? String(item.project_id)
+          : "",
       booking_type_id: item.booking_type_id ? String(item.booking_type_id) : "",
       status_id: item.status_id ? String(item.status_id) : "",
-      assigned_contact_id: item.assigned_contact_id ? String(item.assigned_contact_id) : "",
+      assigned_contact_id: item.assigned_contact_id
+        ? String(item.assigned_contact_id)
+        : "",
       booking_date: item.booking_date ?? "",
       start_time: item.start_time ?? "",
       end_time: item.end_time ?? "",
@@ -384,11 +439,18 @@ export default function BookingsPage() {
 
     const payload = {
       booking_no: form.booking_no.trim(),
-      client_id: toNumberOrNull(form.client_id),
-      project_id: toNumberOrNull(form.project_id),
+
+      // Legacy booking_clients / booking_projects columns are no longer used.
+      // Master data now comes from public.clients and public.projects.
+      client_id: null,
+      project_id: null,
+
+      global_client_id: toNumberOrNull(form.client_id),
+      global_project_id: toNumberOrNull(form.project_id),
       booking_type_id: toNumberOrNull(form.booking_type_id),
       status_id: toNumberOrNull(form.status_id),
       assigned_contact_id: toNumberOrNull(form.assigned_contact_id),
+      assigned_to: "",
       booking_date: form.booking_date || null,
       start_time: form.start_time || null,
       end_time: form.end_time || null,
@@ -483,7 +545,10 @@ export default function BookingsPage() {
     if (!dropdownModal) return;
     const currentCtx = await getWorkspaceContext();
     if (!currentCtx) return;
-    if (!confirm("Delete this value? Existing bookings using it may be affected.")) return;
+    if (
+      !confirm("Delete this value? Existing bookings using it may be affected.")
+    )
+      return;
 
     const config = dropdownConfig[dropdownModal];
     const { error } = await supabase
@@ -518,7 +583,7 @@ export default function BookingsPage() {
   function downloadBookingTemplate() {
     const csv = [
       "booking_no,client_name,project_name,booking_type,status,assigned_contact_email,booking_date,start_time,end_time,location,notes",
-      "BK-001,Acme Client,ERP Project,Meeting,Scheduled,person@example.com,2026-05-15,10:00,11:00,Conference Room,Initial booking discussion",
+      "BK-001,Connect,NYC 2K Rollout,Meeting,Scheduled,person@example.com,2026-05-15,10:00,11:00,Conference Room,Initial booking discussion",
     ].join("\n");
 
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -536,7 +601,9 @@ export default function BookingsPage() {
         <div className="rounded-2xl border border-slate-800 bg-[#050505] px-10 py-8 text-center shadow-2xl">
           <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-slate-700 border-t-green-500" />
           <p className="text-base font-bold text-white">Loading dashboard...</p>
-          <p className="mt-1 text-sm text-slate-400">Please wait while data is being fetched</p>
+          <p className="mt-1 text-sm text-slate-400">
+            Please wait while data is being fetched
+          </p>
         </div>
       </div>
     );
@@ -554,9 +621,12 @@ export default function BookingsPage() {
         <p className="text-sm font-semibold text-green-600">Bookings</p>
         <div className="mt-2 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-950">Bookings Management Dashboard</h1>
+            <h1 className="text-2xl font-bold text-slate-950">
+              Bookings Management Dashboard
+            </h1>
             <p className="mt-2 text-sm text-slate-600">
-              Create and manage bookings using Supabase booking clients, projects, types, and statuses.
+              Create and manage bookings using global master clients, projects,
+              contacts, booking types, and statuses.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -585,8 +655,12 @@ export default function BookingsPage() {
 
       <div className="mb-6 grid grid-cols-1 gap-4 xl:grid-cols-[380px_1fr]">
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-xl font-bold text-slate-950">Quick Add Booking</h2>
-          <p className="mt-1 text-sm text-slate-500">Values come from booking Supabase master tables.</p>
+          <h2 className="text-xl font-bold text-slate-950">
+            Quick Add Booking
+          </h2>
+          <p className="mt-1 text-sm text-slate-500">
+            Clients, projects, and contacts come from global master data.
+          </p>
           <BookingForm
             form={form}
             clients={clients}
@@ -611,7 +685,9 @@ export default function BookingsPage() {
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div>
               <h2 className="text-xl font-bold text-slate-950">Booking List</h2>
-              <p className="mt-1 text-sm text-slate-500">Click any row to view full booking details.</p>
+              <p className="mt-1 text-sm text-slate-500">
+                Click any row to view full booking details.
+              </p>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row">
               <button
@@ -660,21 +736,42 @@ export default function BookingsPage() {
                       className="cursor-pointer border-t border-slate-100 hover:bg-slate-50"
                     >
                       <td className="px-4 py-4 align-top">
-                        <p className="font-bold text-slate-950">{booking.booking_no || "-"}</p>
-                        <p className="mt-1 max-w-[260px] truncate text-xs text-slate-500">{booking.location || "No location"}</p>
+                        <p className="font-bold text-slate-950">
+                          {booking.booking_no || "-"}
+                        </p>
+                        <p className="mt-1 max-w-[260px] truncate text-xs text-slate-500">
+                          {booking.location || "No location"}
+                        </p>
                       </td>
                       <td className="px-4 py-4 align-top">
-                        <p className="font-semibold text-slate-900">{booking.client_name}</p>
-                        <p className="mt-1 text-xs text-slate-500">{booking.project_name}</p>
+                        <p className="font-semibold text-slate-900">
+                          {booking.client_name}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {booking.project_name}
+                        </p>
                       </td>
-                      <td className="px-4 py-4 align-top text-slate-700">{booking.booking_type}</td>
-                      <td className="px-4 py-4 align-top">
-                        <p className="font-semibold text-slate-900">{booking.booking_date || "-"}</p>
-                        <p className="mt-1 text-xs text-slate-500">{formatTimeRange(booking.start_time, booking.end_time)}</p>
+                      <td className="px-4 py-4 align-top text-slate-700">
+                        {booking.booking_type}
                       </td>
                       <td className="px-4 py-4 align-top">
-                        <p className="font-semibold text-slate-900">{booking.assigned_contact_name}</p>
-                        <p className="mt-1 text-xs text-slate-500">{booking.assigned_contact_email}</p>
+                        <p className="font-semibold text-slate-900">
+                          {booking.booking_date || "-"}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {formatTimeRange(
+                            booking.start_time,
+                            booking.end_time,
+                          )}
+                        </p>
+                      </td>
+                      <td className="px-4 py-4 align-top">
+                        <p className="font-semibold text-slate-900">
+                          {booking.assigned_contact_name}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {booking.assigned_contact_email}
+                        </p>
                       </td>
                       <td className="px-4 py-4 align-top">
                         <span className="rounded-full bg-green-50 px-3 py-1 text-xs font-bold text-green-700">
@@ -682,7 +779,10 @@ export default function BookingsPage() {
                         </span>
                       </td>
                       <td className="px-4 py-4 text-right align-top">
-                        <div className="flex justify-end gap-2" onClick={(e) => e.stopPropagation()}>
+                        <div
+                          className="flex justify-end gap-2"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           <button
                             onClick={() => startEdit(booking)}
                             className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-800 hover:bg-slate-200"
@@ -701,7 +801,10 @@ export default function BookingsPage() {
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={7} className="px-4 py-10 text-center text-sm text-slate-500">
+                    <td
+                      colSpan={7}
+                      className="px-4 py-10 text-center text-sm text-slate-500"
+                    >
                       No bookings found.
                     </td>
                   </tr>
@@ -782,7 +885,10 @@ export default function BookingsPage() {
       ) : null}
 
       {selectedBooking ? (
-        <BookingDetailsModal booking={selectedBooking} onClose={() => setSelectedBooking(null)} />
+        <BookingDetailsModal
+          booking={selectedBooking}
+          onClose={() => setSelectedBooking(null)}
+        />
       ) : null}
     </div>
   );
@@ -819,16 +925,30 @@ function BookingForm({
 }) {
   return (
     <form onSubmit={onSubmit} className="mt-5 space-y-4">
-      <div className={compact ? "space-y-4" : "grid grid-cols-1 gap-4 md:grid-cols-2"}>
-        <Input label="Booking No" value={form.booking_no} onChange={(v) => onChange("booking_no", v)} placeholder="BK-001" />
-        <Input label="Booking Date" type="date" value={form.booking_date} onChange={(v) => onChange("booking_date", v)} />
+      <div
+        className={
+          compact ? "space-y-4" : "grid grid-cols-1 gap-4 md:grid-cols-2"
+        }
+      >
+        <Input
+          label="Booking No"
+          value={form.booking_no}
+          onChange={(v) => onChange("booking_no", v)}
+          placeholder="BK-001"
+        />
+        <Input
+          label="Booking Date"
+          type="date"
+          value={form.booking_date}
+          onChange={(v) => onChange("booking_date", v)}
+        />
       </div>
 
       <SelectWithManage
         label="Client"
         value={form.client_id}
         options={clients}
-        placeholder="Select booking client"
+        placeholder="Select client from master data"
         onChange={(v) => onChange("client_id", v)}
         onManage={() => onManage("client")}
       />
@@ -837,12 +957,16 @@ function BookingForm({
         label="Project"
         value={form.project_id}
         options={projects}
-        placeholder="Select booking project"
+        placeholder="Select project from master data"
         onChange={(v) => onChange("project_id", v)}
         onManage={() => onManage("project")}
       />
 
-      <div className={compact ? "space-y-4" : "grid grid-cols-1 gap-4 md:grid-cols-2"}>
+      <div
+        className={
+          compact ? "space-y-4" : "grid grid-cols-1 gap-4 md:grid-cols-2"
+        }
+      >
         <SelectWithManage
           label="Booking Type"
           value={form.booking_type_id}
@@ -864,20 +988,46 @@ function BookingForm({
       <Select
         label="Assigned To"
         value={form.assigned_contact_id}
-        options={contacts.map((x) => ({ id: x.id, name: [x.full_name, x.email].filter(Boolean).join(" · ") || `Contact ${x.id}` }))}
+        options={contacts.map((x) => ({
+          id: x.id,
+          name:
+            [x.full_name, x.email].filter(Boolean).join(" · ") ||
+            `Contact ${x.id}`,
+        }))}
         placeholder="Select contact"
         onChange={(v) => onChange("assigned_contact_id", v)}
       />
 
-      <div className={compact ? "space-y-4" : "grid grid-cols-1 gap-4 md:grid-cols-2"}>
-        <Input label="Start Time" type="time" value={form.start_time} onChange={(v) => onChange("start_time", v)} />
-        <Input label="End Time" type="time" value={form.end_time} onChange={(v) => onChange("end_time", v)} />
+      <div
+        className={
+          compact ? "space-y-4" : "grid grid-cols-1 gap-4 md:grid-cols-2"
+        }
+      >
+        <Input
+          label="Start Time"
+          type="time"
+          value={form.start_time}
+          onChange={(v) => onChange("start_time", v)}
+        />
+        <Input
+          label="End Time"
+          type="time"
+          value={form.end_time}
+          onChange={(v) => onChange("end_time", v)}
+        />
       </div>
 
-      <Input label="Location" value={form.location} onChange={(v) => onChange("location", v)} placeholder="Meeting room, site, or address" />
+      <Input
+        label="Location"
+        value={form.location}
+        onChange={(v) => onChange("location", v)}
+        placeholder="Meeting room, site, or address"
+      />
 
       <div>
-        <label className="mb-2 block text-sm font-semibold text-slate-700">Notes</label>
+        <label className="mb-2 block text-sm font-semibold text-slate-700">
+          Notes
+        </label>
         <textarea
           value={form.notes}
           onChange={(e) => onChange("notes", e.target.value)}
@@ -926,7 +1076,9 @@ function SelectWithManage({
 }) {
   return (
     <div>
-      <label className="mb-2 block text-sm font-semibold text-slate-700">{label}</label>
+      <label className="mb-2 block text-sm font-semibold text-slate-700">
+        {label}
+      </label>
       <div className="flex gap-2">
         <select
           value={value}
@@ -967,7 +1119,9 @@ function Select({
 }) {
   return (
     <div>
-      <label className="mb-2 block text-sm font-semibold text-slate-700">{label}</label>
+      <label className="mb-2 block text-sm font-semibold text-slate-700">
+        {label}
+      </label>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -999,7 +1153,9 @@ function Input({
 }) {
   return (
     <div>
-      <label className="mb-2 block text-sm font-semibold text-slate-700">{label}</label>
+      <label className="mb-2 block text-sm font-semibold text-slate-700">
+        {label}
+      </label>
       <input
         type={type}
         value={value}
@@ -1043,7 +1199,10 @@ function DropdownManagerModal({
             <p className="text-sm font-semibold text-green-600">Master Data</p>
             <h2 className="mt-1 text-2xl font-bold text-slate-950">{title}</h2>
           </div>
-          <button onClick={onClose} className="rounded-xl bg-slate-100 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-200">
+          <button
+            onClick={onClose}
+            className="rounded-xl bg-slate-100 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-200"
+          >
             Close
           </button>
         </div>
@@ -1055,11 +1214,18 @@ function DropdownManagerModal({
             placeholder="Enter name"
             className="min-w-0 flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-green-500"
           />
-          <button type="submit" className="rounded-xl bg-green-600 px-4 py-3 text-sm font-bold text-white hover:bg-green-700">
+          <button
+            type="submit"
+            className="rounded-xl bg-green-600 px-4 py-3 text-sm font-bold text-white hover:bg-green-700"
+          >
             {editingId ? "Update" : "Add"}
           </button>
           {editingId ? (
-            <button type="button" onClick={onCancelEdit} className="rounded-xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200">
+            <button
+              type="button"
+              onClick={onCancelEdit}
+              className="rounded-xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200"
+            >
               Cancel
             </button>
           ) : null}
@@ -1068,20 +1234,31 @@ function DropdownManagerModal({
         <div className="mt-5 max-h-[360px] overflow-auto rounded-2xl border border-slate-200">
           {items.length ? (
             items.map((item) => (
-              <div key={item.id} className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 last:border-b-0">
+              <div
+                key={item.id}
+                className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 last:border-b-0"
+              >
                 <p className="font-semibold text-slate-900">{item.name}</p>
                 <div className="flex gap-2">
-                  <button onClick={() => onEdit(item)} className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-800 hover:bg-slate-200">
+                  <button
+                    onClick={() => onEdit(item)}
+                    className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-800 hover:bg-slate-200"
+                  >
                     Edit
                   </button>
-                  <button onClick={() => onDelete(item.id)} className="rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-600 hover:bg-red-100">
+                  <button
+                    onClick={() => onDelete(item.id)}
+                    className="rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-600 hover:bg-red-100"
+                  >
                     Delete
                   </button>
                 </div>
               </div>
             ))
           ) : (
-            <div className="px-4 py-8 text-center text-sm text-slate-500">No values found.</div>
+            <div className="px-4 py-8 text-center text-sm text-slate-500">
+              No values found.
+            </div>
           )}
         </div>
       </div>
@@ -1089,19 +1266,32 @@ function DropdownManagerModal({
   );
 }
 
-function BookingDetailsModal({ booking, onClose }: { booking: BookingRow; onClose: () => void }) {
+function BookingDetailsModal({
+  booking,
+  onClose,
+}: {
+  booking: BookingRow;
+  onClose: () => void;
+}) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
       <div className="w-full max-w-3xl rounded-2xl bg-white p-6 shadow-2xl">
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4">
           <div>
-            <p className="text-sm font-semibold text-green-600">Booking Details</p>
-            <h2 className="mt-1 text-2xl font-bold text-slate-950">{booking.booking_no || "-"}</h2>
+            <p className="text-sm font-semibold text-green-600">
+              Booking Details
+            </p>
+            <h2 className="mt-1 text-2xl font-bold text-slate-950">
+              {booking.booking_no || "-"}
+            </h2>
             <p className="mt-1 text-sm text-slate-500">
               {booking.client_name} · {booking.project_name}
             </p>
           </div>
-          <button onClick={onClose} className="rounded-xl bg-slate-100 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-200">
+          <button
+            onClick={onClose}
+            className="rounded-xl bg-slate-100 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-200"
+          >
             Close
           </button>
         </div>
@@ -1110,12 +1300,26 @@ function BookingDetailsModal({ booking, onClose }: { booking: BookingRow; onClos
           <ModalCard title="Type" value={booking.booking_type} />
           <ModalCard title="Status" value={booking.status} />
           <ModalCard title="Date" value={booking.booking_date || "-"} />
-          <ModalCard title="Time" value={formatTimeRange(booking.start_time, booking.end_time)} />
+          <ModalCard
+            title="Time"
+            value={formatTimeRange(booking.start_time, booking.end_time)}
+          />
         </div>
 
         <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
-          <InfoBox title="Assigned To" lines={[booking.assigned_contact_name, booking.assigned_contact_email, booking.assigned_contact_phone, booking.assigned_contact_designation]} />
-          <InfoBox title="Location" lines={[booking.location || "No location added"]} />
+          <InfoBox
+            title="Assigned To"
+            lines={[
+              booking.assigned_contact_name,
+              booking.assigned_contact_email,
+              booking.assigned_contact_phone,
+              booking.assigned_contact_designation,
+            ]}
+          />
+          <InfoBox
+            title="Location"
+            lines={[booking.location || "No location added"]}
+          />
         </div>
 
         <div className="mt-6 rounded-2xl bg-slate-50 p-5">
@@ -1129,19 +1333,37 @@ function BookingDetailsModal({ booking, onClose }: { booking: BookingRow; onClos
   );
 }
 
-function InfoBox({ title, lines }: { title: string; lines: Array<string | null | undefined> }) {
+function InfoBox({
+  title,
+  lines,
+}: {
+  title: string;
+  lines: Array<string | null | undefined>;
+}) {
   const visible = lines.filter(Boolean) as string[];
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</p>
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        {title}
+      </p>
       <div className="mt-2 space-y-1 text-sm font-semibold text-slate-900">
-        {visible.length ? visible.map((line) => <p key={line}>{line}</p>) : <p>-</p>}
+        {visible.length ? (
+          visible.map((line) => <p key={line}>{line}</p>)
+        ) : (
+          <p>-</p>
+        )}
       </div>
     </div>
   );
 }
 
-function ModalCard({ title, value }: { title: string; value: string | number }) {
+function ModalCard({
+  title,
+  value,
+}: {
+  title: string;
+  value: string | number;
+}) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
       <p className="text-xs text-slate-500">{title}</p>

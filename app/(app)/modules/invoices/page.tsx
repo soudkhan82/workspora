@@ -323,9 +323,9 @@ export default function InvoicesPage() {
           .from("invoices")
           .select("*")
           .order("created_at", { ascending: false }),
-        supabase.from("invoice_clients").select("id, name").order("name"),
-        supabase.from("invoice_vendors").select("id, name").order("name"),
-        supabase.from("invoice_projects").select("id, name").order("name"),
+        supabase.from("clients").select("id, name").order("name"),
+        supabase.from("vendors").select("id, name").order("name"),
+        supabase.from("projects").select("id, name").order("name"),
         supabase.from("invoice_milestones").select("id, name").order("name"),
         supabase.from("invoice_statuses").select("id, name").order("name"),
         supabase
@@ -412,7 +412,7 @@ export default function InvoicesPage() {
             clientRows.find(
               (x) =>
                 Number(x.id) ===
-                Number(item.client_id ?? item.global_client_id),
+                Number(item.global_client_id ?? item.client_id),
             )?.name ??
             null,
           vendor_name:
@@ -428,7 +428,7 @@ export default function InvoicesPage() {
             projectRows.find(
               (x) =>
                 Number(x.id) ===
-                Number(item.project_id ?? item.global_project_id),
+                Number(item.global_project_id ?? item.project_id),
             )?.name ??
             null,
         };
@@ -468,11 +468,11 @@ export default function InvoicesPage() {
       [
         item.invoice_no,
         item.client_name ||
-          displayName(clients, item.client_id ?? item.global_client_id),
+          displayName(clients, item.global_client_id ?? item.client_id),
         item.vendor_name ||
           displayName(vendors, item.vendor_id ?? item.global_vendor_id),
         item.project_name ||
-          displayName(projects, item.project_id ?? item.global_project_id),
+          displayName(projects, item.global_project_id ?? item.project_id),
         displayName(milestones, item.milestone_id),
         displayName(statuses, item.status_id),
         item.currency || "PKR",
@@ -535,20 +535,20 @@ export default function InvoicesPage() {
     setEditingInvoice(invoice);
     setForm({
       invoice_no: invoice.invoice_no || "",
-      client_id: invoice.client_id
-        ? String(invoice.client_id)
-        : invoice.global_client_id
-          ? String(invoice.global_client_id)
+      client_id: invoice.global_client_id
+        ? String(invoice.global_client_id)
+        : invoice.client_id
+          ? String(invoice.client_id)
           : "",
-      vendor_id: invoice.vendor_id
-        ? String(invoice.vendor_id)
-        : invoice.global_vendor_id
-          ? String(invoice.global_vendor_id)
+      vendor_id: invoice.global_vendor_id
+        ? String(invoice.global_vendor_id)
+        : invoice.vendor_id
+          ? String(invoice.vendor_id)
           : "",
-      project_id: invoice.project_id
-        ? String(invoice.project_id)
-        : invoice.global_project_id
-          ? String(invoice.global_project_id)
+      project_id: invoice.global_project_id
+        ? String(invoice.global_project_id)
+        : invoice.project_id
+          ? String(invoice.project_id)
           : "",
       milestone_id: invoice.milestone_id ? String(invoice.milestone_id) : "",
       status_id: invoice.status_id ? String(invoice.status_id) : "",
@@ -636,9 +636,14 @@ export default function InvoicesPage() {
 
       const payload = {
         invoice_no: form.invoice_no.trim(),
-        client_id: Number(form.client_id),
-        vendor_id: form.vendor_id ? Number(form.vendor_id) : null,
-        project_id: Number(form.project_id),
+        // Master-data mode: clients/vendors/projects come from public master tables.
+        // Keep legacy module-level FK columns null to avoid old invoice_* FK violations.
+        client_id: null,
+        global_client_id: form.client_id ? Number(form.client_id) : null,
+        vendor_id: null,
+        global_vendor_id: form.vendor_id ? Number(form.vendor_id) : null,
+        project_id: null,
+        global_project_id: form.project_id ? Number(form.project_id) : null,
         milestone_id: form.milestone_id ? Number(form.milestone_id) : null,
         status_id: form.status_id ? Number(form.status_id) : null,
         amount: totals.grandTotal,
@@ -736,9 +741,9 @@ export default function InvoicesPage() {
 
   async function resolveLookupId(
     table:
-      | "invoice_clients"
-      | "invoice_vendors"
-      | "invoice_projects"
+      | "clients"
+      | "vendors"
+      | "projects"
       | "invoice_milestones"
       | "invoice_statuses",
     list: DropdownItem[],
@@ -850,21 +855,21 @@ export default function InvoicesPage() {
         }
 
         const clientResult = await resolveLookupId(
-          "invoice_clients",
+          "clients",
           clientLookup,
           clientName,
           true,
         );
         clientLookup = clientResult.list;
         const vendorResult = await resolveLookupId(
-          "invoice_vendors",
+          "vendors",
           vendorLookup,
           vendorName,
           false,
         );
         vendorLookup = vendorResult.list;
         const projectResult = await resolveLookupId(
-          "invoice_projects",
+          "projects",
           projectLookup,
           projectName,
           true,
@@ -954,9 +959,9 @@ export default function InvoicesPage() {
   }
 
   function dropdownTable() {
-    if (dropdownModal === "client") return "invoice_clients";
-    if (dropdownModal === "vendor") return "invoice_vendors";
-    if (dropdownModal === "project") return "invoice_projects";
+    if (dropdownModal === "client") return "clients";
+    if (dropdownModal === "vendor") return "vendors";
+    if (dropdownModal === "project") return "projects";
     if (dropdownModal === "milestone") return "invoice_milestones";
     if (dropdownModal === "status") return "invoice_statuses";
     return "";

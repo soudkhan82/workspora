@@ -22,9 +22,9 @@ const modules = [
     desc: "Manage appointments and reservations.",
   },
   {
-    title: "Time Tracking",
-    href: "/modules/time-tracking",
-    desc: "Track hours, tasks, and productivity.",
+    title: "Purchase Orders",
+    href: "/modules/purchase-orders",
+    desc: "Create and manage vendor purchase orders.",
   },
   {
     title: "Expenses",
@@ -35,6 +35,11 @@ const modules = [
     title: "Workflows",
     href: "/modules/workflows",
     desc: "Automate routine business processes.",
+  },
+  {
+    title: "Credits",
+    href: "/modules/credits",
+    desc: "Manage credits and adjustment records.",
   },
 ];
 
@@ -52,15 +57,15 @@ export default function DashboardPage() {
               Business Workspace Dashboard
             </h1>
             <p className="mt-2 max-w-2xl text-sm text-slate-600">
-              Manage KPIs, invoices, contracts, bookings, expenses, and
-              workflows from one modular SaaS platform.
+              Manage KPIs, invoices, contracts, bookings, purchase orders,
+              expenses, credits, and workflows from one modular SaaS platform.
             </p>
           </div>
         </div>
       </section>
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Active Modules" value="7" />
+        <StatCard title="Active Modules" value="8" />
         <StatCard title="Workspace Status" value="Ready" />
         <StatCard title="Pending Tasks" value="0" />
         <StatCard title="System Health" value="Good" />
@@ -79,7 +84,7 @@ export default function DashboardPage() {
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {modules.map((item) => (
             <Link
-              key={item.title}
+              key={item.href}
               href={item.href}
               className="group rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-green-300 hover:shadow-md"
             >

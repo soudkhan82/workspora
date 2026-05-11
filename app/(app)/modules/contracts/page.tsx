@@ -186,17 +186,18 @@ export default function ContractsPage() {
     const scopedCtx = currentCtx ?? (await getWorkspaceContext());
     if (!scopedCtx) return [];
 
-    let query = supabase
+    // Master-data rule:
+    // clients/vendors/projects are global Workspora master tables.
+    // contract_types/contract_statuses remain contract-specific lookup tables.
+    // Prefer workspace scope so every value created for the workspace is visible
+    // in the dropdown. RLS still protects data from other workspaces/users.
+    let { data, error } = await supabase
       .from(table)
       .select("id,name")
+      .eq("workspace_id", scopedCtx.workspaceId)
       .order("name", { ascending: true });
 
-    // Preferred Workspora scoping. If a legacy master table does not have these
-    // columns, retry without filters instead of breaking the page.
-    let { data, error } = await query
-      .eq("workspace_id", scopedCtx.workspaceId)
-      .eq("created_by", scopedCtx.userId);
-
+    // Fallback for any older lookup table that does not yet have workspace_id.
     if (error) {
       const retry = await supabase
         .from(table)
@@ -207,14 +208,16 @@ export default function ContractsPage() {
     }
 
     if (error) {
-      alert(error.message);
+      alert(`${table}: ${error.message}`);
       return [];
     }
 
-    return (data ?? []).map((item: any) => ({
-      id: Number(item.id),
-      name: String(item.name ?? ""),
-    }));
+    return (data ?? [])
+      .map((item: any) => ({
+        id: Number(item.id),
+        name: String(item.name ?? "").trim(),
+      }))
+      .filter((item) => item.id && item.name);
   }
 
   async function loadContracts(currentCtx?: WorkspaceContext) {
@@ -508,12 +511,18 @@ export default function ContractsPage() {
     };
 
     let result = manageEditId
-      ? await supabase.from(table).update(basePayload).eq("id", manageEditId)
+      ? await supabase
+          .from(table)
+          .update(basePayload)
+          .eq("id", manageEditId)
+          .eq("workspace_id", scopedCtx.workspaceId)
       : await supabase.from(table).insert(scopedPayload);
 
-    // Legacy fallback for master tables that do not have workspace_id/created_by yet.
-    if (result.error && !manageEditId) {
-      result = await supabase.from(table).insert(basePayload);
+    // Legacy fallback for lookup tables that do not have workspace_id/created_by yet.
+    if (result.error) {
+      result = manageEditId
+        ? await supabase.from(table).update(basePayload).eq("id", manageEditId)
+        : await supabase.from(table).insert(basePayload);
     }
 
     if (result.error) {
@@ -595,8 +604,7 @@ export default function ContractsPage() {
             Contracts
           </h1>
           <p className="mt-1 max-w-xl text-sm text-slate-600">
-            Manage contracts. Clients are optional; vendors and projects come
-            from global master data.
+            Manage contracts using global clients, vendors and projects from master data.
           </p>
         </div>
 
