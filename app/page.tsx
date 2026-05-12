@@ -121,28 +121,34 @@ export default function HomePage() {
         setErrorText("");
 
         const {
-          data: { user },
-          error: userError,
-        } = await supabase.auth.getUser();
+          data: { session },
+          error: sessionError,
+        } = await supabase.auth.getSession();
 
-        if (userError) {
-          throw userError;
+        if (sessionError) {
+          throw sessionError;
         }
 
-        if (!user) {
+        if (!session?.user) {
           router.replace("/auth/login");
           return;
         }
 
+        const { data: workspaceId, error: workspaceError } = await supabase.rpc(
+          "ensure_user_workspace",
+        );
+
+        if (workspaceError) {
+          throw workspaceError;
+        }
+
+        if (!workspaceId) {
+          throw new Error("Workspace could not be created.");
+        }
+
         if (!mounted) return;
 
-        setAuthChecking(false);
-
-        const activeWorkspaceId = await ensureWorkspace();
-
-        if (!mounted) return;
-
-        setWorkspaceId(activeWorkspaceId);
+        setWorkspaceId(workspaceId);
 
         const [
           projects,
@@ -154,14 +160,14 @@ export default function HomePage() {
           contracts,
           bookings,
         ] = await Promise.all([
-          getCount("projects", activeWorkspaceId),
-          getCount("clients", activeWorkspaceId),
-          getCount("workflow_tasks", activeWorkspaceId),
-          getCount("purchase_orders", activeWorkspaceId),
-          getCount("invoices", activeWorkspaceId),
-          getCount("kpis", activeWorkspaceId),
-          getCount("contracts", activeWorkspaceId),
-          getCount("bookings", activeWorkspaceId),
+          getCount("projects", workspaceId),
+          getCount("clients", workspaceId),
+          getCount("workflow_tasks", workspaceId),
+          getCount("purchase_orders", workspaceId),
+          getCount("invoices", workspaceId),
+          getCount("kpis", workspaceId),
+          getCount("contracts", workspaceId),
+          getCount("bookings", workspaceId),
         ]);
 
         if (!mounted) return;
@@ -178,6 +184,7 @@ export default function HomePage() {
         });
       } catch (err: any) {
         console.error("Landing page init failed:", err);
+
         if (mounted) {
           setErrorText(
             err?.message ||

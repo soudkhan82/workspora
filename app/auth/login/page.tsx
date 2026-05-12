@@ -14,8 +14,6 @@ type Slide = {
 type AuthMode = "login" | "signup";
 
 const POST_LOGIN_ROUTE = "/dashboard";
-// If your actual dashboard route is app/page.tsx, change this to:
-// const POST_LOGIN_ROUTE = "/";
 
 const slides: Slide[] = [
   {
@@ -83,12 +81,47 @@ export default function LoginPage() {
     };
   }, []);
 
+  function resetMessages() {
+    setErrorMessage("");
+    setSuccessMessage("");
+  }
+
+  async function ensureWorkspaceBeforeRoute() {
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession();
+
+    if (sessionError) {
+      throw sessionError;
+    }
+
+    if (!session?.user) {
+      throw new Error("Auth session missing after login.");
+    }
+
+    const { data: workspaceId, error: workspaceError } = await supabase.rpc(
+      "ensure_user_workspace",
+    );
+
+    if (workspaceError) {
+      throw workspaceError;
+    }
+
+    if (!workspaceId) {
+      throw new Error("Workspace could not be created.");
+    }
+
+    return workspaceId as string;
+  }
+
   async function routeUser() {
     if (routingRef.current) return;
 
     routingRef.current = true;
 
     try {
+      await ensureWorkspaceBeforeRoute();
       router.replace(POST_LOGIN_ROUTE);
     } finally {
       if (mountedRef.current) {
@@ -114,7 +147,8 @@ export default function LoginPage() {
         const session = result?.data?.session;
 
         if (session?.user) {
-          router.replace(POST_LOGIN_ROUTE);
+          setGlobalLoading(true);
+          await routeUser();
           return;
         }
       } catch {
@@ -141,11 +175,6 @@ export default function LoginPage() {
 
     return () => window.clearInterval(timer);
   }, []);
-
-  function resetMessages() {
-    setErrorMessage("");
-    setSuccessMessage("");
-  }
 
   async function handleEmailAuth(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -193,6 +222,11 @@ export default function LoginPage() {
       const { data, error } = await supabase.auth.signUp({
         email: cleanEmail,
         password,
+        options: {
+          data: {
+            full_name: cleanEmail.split("@")[0],
+          },
+        },
       });
 
       if (error) {
@@ -211,11 +245,12 @@ export default function LoginPage() {
 
       setGlobalLoading(true);
       await routeUser();
-    } catch {
+    } catch (err: any) {
       setErrorMessage(
-        authMode === "login"
-          ? "Unable to sign in. Please check Supabase URL, anon key, and network connection."
-          : "Unable to create account. Please check Supabase email auth settings.",
+        err?.message ||
+          (authMode === "login"
+            ? "Unable to sign in. Please check Supabase URL, anon key, and network connection."
+            : "Unable to create account. Please check Supabase email auth settings."),
       );
     } finally {
       if (mountedRef.current) {
@@ -267,7 +302,6 @@ export default function LoginPage() {
     <main className="min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top_left,#dcfce7_0,#f8fafc_32%,#ffffff_74%)] text-slate-950">
       <section className="flex min-h-screen w-full items-center justify-center px-4 py-5 sm:px-6 lg:px-8">
         <div className="grid h-[calc(100vh-56px)] min-h-[610px] w-full max-w-[1380px] items-center gap-7 lg:grid-cols-[minmax(0,1.08fr)_420px] xl:gap-8">
-          {/* LEFT PREVIEW / CAROUSEL */}
           <div className="hidden h-full min-h-0 lg:block">
             <div className="flex h-full min-h-0 flex-col rounded-[2rem] border border-white/80 bg-white/72 p-4 shadow-2xl shadow-emerald-100/70 backdrop-blur-xl">
               <div className="min-h-0 flex-1 overflow-hidden rounded-[1.6rem] border border-slate-200 bg-slate-50">
@@ -317,10 +351,8 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* RIGHT LOGIN */}
           <div className="mx-auto flex w-full max-w-[420px] items-center lg:h-full lg:max-w-none">
             <div className="w-full rounded-[2rem] border border-slate-200 bg-white/92 p-6 shadow-2xl shadow-slate-200/70 backdrop-blur-xl sm:p-7">
-              {/* MOBILE PREVIEW */}
               <div className="mb-5 block lg:hidden">
                 <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
                   <div className="flex h-[230px] w-full items-center justify-center overflow-hidden p-2">
