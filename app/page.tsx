@@ -77,10 +77,22 @@ const emptyCounts: Counts = {
   bookings: 0,
 };
 
-async function getCount(table: string) {
+async function ensureWorkspace() {
+  const { data, error } = await supabase.rpc("ensure_user_workspace");
+
+  if (error) {
+    console.error("Workspace creation/check failed:", error.message);
+    throw error;
+  }
+
+  return data as string;
+}
+
+async function getCount(table: string, workspaceId: string) {
   const { count, error } = await supabase
     .from(table)
-    .select("*", { count: "exact", head: true });
+    .select("*", { count: "exact", head: true })
+    .eq("workspace_id", workspaceId);
 
   if (error) {
     console.error(`Count error for ${table}:`, error.message);
@@ -95,56 +107,96 @@ export default function HomePage() {
 
   const [authChecking, setAuthChecking] = useState(true);
   const [loadingData, setLoadingData] = useState(true);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [errorText, setErrorText] = useState("");
   const [counts, setCounts] = useState<Counts>(emptyCounts);
 
   useEffect(() => {
+    let mounted = true;
+
     async function init() {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      try {
+        setAuthChecking(true);
+        setLoadingData(true);
+        setErrorText("");
 
-      if (!user) {
-        router.replace("/auth/login");
-        return;
+        const {
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser();
+
+        if (userError) {
+          throw userError;
+        }
+
+        if (!user) {
+          router.replace("/auth/login");
+          return;
+        }
+
+        if (!mounted) return;
+
+        setAuthChecking(false);
+
+        const activeWorkspaceId = await ensureWorkspace();
+
+        if (!mounted) return;
+
+        setWorkspaceId(activeWorkspaceId);
+
+        const [
+          projects,
+          clients,
+          tasks,
+          purchaseOrders,
+          invoices,
+          kpis,
+          contracts,
+          bookings,
+        ] = await Promise.all([
+          getCount("projects", activeWorkspaceId),
+          getCount("clients", activeWorkspaceId),
+          getCount("workflow_tasks", activeWorkspaceId),
+          getCount("purchase_orders", activeWorkspaceId),
+          getCount("invoices", activeWorkspaceId),
+          getCount("kpis", activeWorkspaceId),
+          getCount("contracts", activeWorkspaceId),
+          getCount("bookings", activeWorkspaceId),
+        ]);
+
+        if (!mounted) return;
+
+        setCounts({
+          projects,
+          clients,
+          tasks,
+          purchaseOrders,
+          invoices,
+          kpis,
+          contracts,
+          bookings,
+        });
+      } catch (err: any) {
+        console.error("Landing page init failed:", err);
+        if (mounted) {
+          setErrorText(
+            err?.message ||
+              "Unable to prepare workspace. Please refresh or contact admin.",
+          );
+        }
+      } finally {
+        if (mounted) {
+          setAuthChecking(false);
+          setLoadingData(false);
+        }
       }
-
-      setAuthChecking(false);
-
-      const [
-        projects,
-        clients,
-        tasks,
-        purchaseOrders,
-        invoices,
-        kpis,
-        contracts,
-        bookings,
-      ] = await Promise.all([
-        getCount("projects"),
-        getCount("clients"),
-        getCount("workflow_tasks"),
-        getCount("purchase_orders"),
-        getCount("invoices"),
-        getCount("kpis"),
-        getCount("contracts"),
-        getCount("bookings"),
-      ]);
-
-      setCounts({
-        projects,
-        clients,
-        tasks,
-        purchaseOrders,
-        invoices,
-        kpis,
-        contracts,
-        bookings,
-      });
-
-      setLoadingData(false);
     }
 
     init();
+
+    return () => {
+      mounted = false;
+    };
   }, [router]);
 
   const pulse = useMemo(() => {
@@ -194,6 +246,26 @@ export default function HomePage() {
     );
   }
 
+  if (errorText) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-100 px-6">
+        <div className="max-w-xl rounded-2xl border border-red-200 bg-white p-8 text-center shadow-sm">
+          <div className="text-lg font-extrabold text-red-700">
+            Workspace setup failed
+          </div>
+          <p className="mt-3 text-sm leading-6 text-slate-600">{errorText}</p>
+
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-6 rounded-xl bg-emerald-600 px-6 py-3 text-sm font-bold text-white hover:bg-emerald-700"
+          >
+            Retry
+          </button>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen bg-slate-100 px-8 py-10 text-slate-950">
       <section className="mx-auto max-w-7xl">
@@ -213,6 +285,12 @@ export default function HomePage() {
                 of business modules including KPIs, bookings, contracts,
                 workflows, invoices and purchase orders.
               </p>
+
+              {workspaceId && (
+                <div className="mt-4 rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-xs font-semibold text-emerald-700">
+                  Active workspace ready
+                </div>
+              )}
 
               <div className="mt-8 flex flex-wrap gap-3">
                 <Link
