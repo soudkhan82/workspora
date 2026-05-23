@@ -79,9 +79,18 @@ export default function KPIPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [bulkUploading, setBulkUploading] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [search, setSearch] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedKpi, setSelectedKpi] = useState<KPI | null>(null);
+
+  const [selectedKpiIds, setSelectedKpiIds] = useState<string[]>([]);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [uploadMode, setUploadMode] = useState<"append" | "overwrite">(
+    "append",
+  );
+  const [csvFile, setCsvFile] = useState<File | null>(null);
 
   const [form, setForm] = useState({
     title: "",
@@ -98,6 +107,12 @@ export default function KPIPage() {
     void loadInitialData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    setSelectedKpiIds((prev) =>
+      prev.filter((id) => kpis.some((item) => item.id === id)),
+    );
+  }, [kpis]);
 
   async function getWorkspaceContext(): Promise<WorkspaceContext | null> {
     if (ctx?.userId && ctx?.workspaceId) return ctx;
@@ -399,17 +414,19 @@ export default function KPIPage() {
     });
   }
 
-  async function uploadKpiCsv(e: React.ChangeEvent<HTMLInputElement>) {
+  async function uploadKpiCsv() {
     const currentCtx = await getWorkspaceContext();
     if (!currentCtx) return;
 
-    const file = e.target.files?.[0];
-    if (!file) return;
+    if (!csvFile) {
+      alert("Please select a CSV file first.");
+      return;
+    }
 
     setBulkUploading(true);
 
     try {
-      const text = await file.text();
+      const text = await csvFile.text();
       const rows = parseCsv(text);
 
       const payload = rows
@@ -427,7 +444,22 @@ export default function KPIPage() {
           created_by: currentCtx.userId,
         }));
 
-      if (!payload.length) return alert("No valid KPI records found.");
+      if (!payload.length) {
+        alert("No valid KPI records found.");
+        return;
+      }
+
+      if (uploadMode === "overwrite") {
+        const { error: deleteError } = await supabase
+          .from("kpis")
+          .delete()
+          .eq("workspace_id", currentCtx.workspaceId);
+
+        if (deleteError) {
+          alert(deleteError.message);
+          return;
+        }
+      }
 
       const { error } = await supabase.from("kpis").insert(payload);
 
@@ -436,12 +468,60 @@ export default function KPIPage() {
         return;
       }
 
+      setUploadModalOpen(false);
+      setUploadMode("append");
+      setCsvFile(null);
       await fetchKpis(currentCtx);
-      alert(`${payload.length} KPI records uploaded successfully.`);
+      alert(
+        uploadMode === "overwrite"
+          ? `${payload.length} KPI records imported after overwrite.`
+          : `${payload.length} KPI records appended successfully.`,
+      );
     } finally {
       setBulkUploading(false);
-      e.target.value = "";
     }
+  }
+
+  async function deleteSelectedKpis() {
+    const currentCtx = await getWorkspaceContext();
+    if (!currentCtx) return;
+
+    if (selectedKpiIds.length === 0) return;
+
+    setBulkDeleting(true);
+
+    try {
+      const { error } = await supabase
+        .from("kpis")
+        .delete()
+        .eq("workspace_id", currentCtx.workspaceId)
+        .in("id", selectedKpiIds);
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+
+      setSelectedKpiIds([]);
+      setDeleteModalOpen(false);
+      await fetchKpis(currentCtx);
+    } finally {
+      setBulkDeleting(false);
+    }
+  }
+
+  function toggleKpiSelection(id: string, checked: boolean) {
+    setSelectedKpiIds((prev) =>
+      checked
+        ? Array.from(new Set([...prev, id]))
+        : prev.filter((selectedId) => selectedId !== id),
+    );
+  }
+
+  function resetUploadModal() {
+    setUploadModalOpen(false);
+    setUploadMode("append");
+    setCsvFile(null);
   }
 
   const dropdownCategories = useMemo(() => {
@@ -484,6 +564,22 @@ export default function KPIPage() {
       compareKpis(a, b, sortKey, sortDirection),
     );
   }, [kpis, search, sortKey, sortDirection]);
+
+  const visibleKpiIds = useMemo(
+    () => filteredKpis.map((item) => item.id),
+    [filteredKpis],
+  );
+
+  const allVisibleSelected =
+    visibleKpiIds.length > 0 &&
+    visibleKpiIds.every((id) => selectedKpiIds.includes(id));
+
+  function toggleAllVisibleKpis(checked: boolean) {
+    setSelectedKpiIds((prev) => {
+      if (!checked) return prev.filter((id) => !visibleKpiIds.includes(id));
+      return Array.from(new Set([...prev, ...visibleKpiIds]));
+    });
+  }
 
   const stats = useMemo(() => {
     const total = kpis.length;
@@ -683,6 +779,16 @@ export default function KPIPage() {
               </div>
 
               <div className="flex flex-col gap-2 sm:flex-row">
+                {selectedKpiIds.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setDeleteModalOpen(true)}
+                    className="rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-700"
+                  >
+                    Delete Selected ({selectedKpiIds.length})
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={downloadKpiTemplate}
@@ -691,16 +797,14 @@ export default function KPIPage() {
                   Download CSV Template
                 </button>
 
-                <label className="cursor-pointer rounded-xl bg-green-600 px-4 py-2 text-center text-sm font-bold text-white hover:bg-green-700">
+                <button
+                  type="button"
+                  onClick={() => setUploadModalOpen(true)}
+                  disabled={bulkUploading}
+                  className="rounded-xl bg-green-600 px-4 py-2 text-center text-sm font-bold text-white hover:bg-green-700 disabled:opacity-60"
+                >
                   {bulkUploading ? "Uploading..." : "Upload CSV"}
-                  <input
-                    type="file"
-                    accept=".csv"
-                    onChange={uploadKpiCsv}
-                    disabled={bulkUploading}
-                    className="hidden"
-                  />
-                </label>
+                </button>
               </div>
             </div>
 
@@ -760,7 +864,16 @@ export default function KPIPage() {
               <table className="w-full table-fixed text-left text-sm">
                 <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                   <tr>
-                    <th className="w-[40%] px-4 py-3">
+                    <th className="w-[5%] px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={allVisibleSelected}
+                        onChange={(e) => toggleAllVisibleKpis(e.target.checked)}
+                        aria-label="Select all visible KPIs"
+                        className="h-4 w-4 rounded border-slate-300 accent-green-600"
+                      />
+                    </th>
+                    <th className="w-[35%] px-4 py-3">
                       <SortButton
                         label="KPI"
                         column="title"
@@ -778,7 +891,7 @@ export default function KPIPage() {
                         onSort={handleSort}
                       />
                     </th>
-                    <th className="w-[14%] px-4 py-3">
+                    <th className="w-[13%] px-4 py-3">
                       <SortButton
                         label="Status"
                         column="status"
@@ -787,7 +900,7 @@ export default function KPIPage() {
                         onSort={handleSort}
                       />
                     </th>
-                    <th className="w-[14%] px-4 py-3">
+                    <th className="w-[13%] px-4 py-3">
                       <SortButton
                         label="Due Date"
                         column="due_date"
@@ -796,7 +909,7 @@ export default function KPIPage() {
                         onSort={handleSort}
                       />
                     </th>
-                    <th className="w-[14%] px-4 py-3 text-right">Actions</th>
+                    <th className="w-[16%] px-4 py-3 text-right">Actions</th>
                   </tr>
                 </thead>
               </table>
@@ -818,7 +931,20 @@ export default function KPIPage() {
                           onClick={() => setSelectedKpi(item)}
                           className="cursor-pointer bg-white hover:bg-slate-50"
                         >
-                          <td className="w-[40%] px-4 py-4">
+                          <td className="w-[5%] px-4 py-4">
+                            <input
+                              type="checkbox"
+                              checked={selectedKpiIds.includes(item.id)}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) =>
+                                toggleKpiSelection(item.id, e.target.checked)
+                              }
+                              aria-label={`Select ${item.title}`}
+                              className="h-4 w-4 rounded border-slate-300 accent-green-600"
+                            />
+                          </td>
+
+                          <td className="w-[35%] px-4 py-4">
                             <div className="font-bold text-slate-950">
                               {item.title}
                             </div>
@@ -841,15 +967,15 @@ export default function KPIPage() {
                             </div>
                           </td>
 
-                          <td className="w-[14%] px-4 py-4">
+                          <td className="w-[13%] px-4 py-4">
                             <StatusBadge status={item.status} />
                           </td>
 
-                          <td className="w-[14%] px-4 py-4 text-slate-600">
+                          <td className="w-[13%] px-4 py-4 text-slate-600">
                             {item.due_date || "-"}
                           </td>
 
-                          <td className="w-[14%] px-4 py-4">
+                          <td className="w-[16%] px-4 py-4">
                             <div className="flex justify-end gap-2">
                               <button
                                 type="button"
@@ -885,6 +1011,25 @@ export default function KPIPage() {
         </div>
       </div>
 
+      <DeleteSelectedKpisModal
+        open={deleteModalOpen}
+        count={selectedKpiIds.length}
+        deleting={bulkDeleting}
+        onCancel={() => setDeleteModalOpen(false)}
+        onConfirm={deleteSelectedKpis}
+      />
+
+      <UploadKpiCsvModal
+        open={uploadModalOpen}
+        mode={uploadMode}
+        file={csvFile}
+        uploading={bulkUploading}
+        onModeChange={setUploadMode}
+        onFileChange={setCsvFile}
+        onCancel={resetUploadModal}
+        onUpload={uploadKpiCsv}
+      />
+
       <CategoryManagerModal
         open={categoryModalOpen}
         categories={categories}
@@ -898,6 +1043,168 @@ export default function KPIPage() {
           onClose={() => setSelectedKpi(null)}
         />
       )}
+    </div>
+  );
+}
+
+function DeleteSelectedKpisModal({
+  open,
+  count,
+  deleting,
+  onCancel,
+  onConfirm,
+}: {
+  open: boolean;
+  count: number;
+  deleting: boolean;
+  onCancel: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+        <h2 className="text-xl font-bold text-slate-950">
+          Delete selected KPIs?
+        </h2>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          You are about to delete {count} KPI record{count === 1 ? "" : "s"}.
+          This action cannot be undone.
+        </p>
+
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={deleting}
+            className="rounded-xl bg-slate-100 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-60"
+          >
+            Cancel
+          </button>
+
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={deleting || count === 0}
+            className="rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-700 disabled:opacity-60"
+          >
+            {deleting ? "Deleting..." : "Delete KPIs"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UploadKpiCsvModal({
+  open,
+  mode,
+  file,
+  uploading,
+  onModeChange,
+  onFileChange,
+  onCancel,
+  onUpload,
+}: {
+  open: boolean;
+  mode: "append" | "overwrite";
+  file: File | null;
+  uploading: boolean;
+  onModeChange: (mode: "append" | "overwrite") => void;
+  onFileChange: (file: File | null) => void;
+  onCancel: () => void;
+  onUpload: () => Promise<void>;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+        <h2 className="text-xl font-bold text-slate-950">Upload KPI CSV</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          Choose whether the CSV should append new KPI records or overwrite the
+          existing KPI values in this workspace.
+        </p>
+
+        <div className="mt-5 space-y-3">
+          <label className="flex cursor-pointer gap-3 rounded-xl border border-slate-200 bg-white p-4 hover:bg-slate-50">
+            <input
+              type="radio"
+              name="kpi-upload-mode"
+              checked={mode === "append"}
+              onChange={() => onModeChange("append")}
+              className="mt-1 h-4 w-4 accent-green-600"
+            />
+            <span>
+              <span className="block text-sm font-bold text-slate-950">
+                Append new KPIs
+              </span>
+              <span className="mt-1 block text-xs leading-5 text-slate-500">
+                Existing KPI records will remain unchanged. CSV rows will be
+                added as new records.
+              </span>
+            </span>
+          </label>
+
+          <label className="flex cursor-pointer gap-3 rounded-xl border border-red-200 bg-red-50/60 p-4 hover:bg-red-50">
+            <input
+              type="radio"
+              name="kpi-upload-mode"
+              checked={mode === "overwrite"}
+              onChange={() => onModeChange("overwrite")}
+              className="mt-1 h-4 w-4 accent-red-600"
+            />
+            <span>
+              <span className="block text-sm font-bold text-red-700">
+                Overwrite existing KPIs
+              </span>
+              <span className="mt-1 block text-xs leading-5 text-red-600">
+                Existing KPI records in this workspace will be deleted first,
+                then CSV rows will be imported.
+              </span>
+            </span>
+          </label>
+        </div>
+
+        <div className="mt-5">
+          <label className="mb-2 block text-sm font-bold text-slate-700">
+            Select CSV file
+          </label>
+          <input
+            type="file"
+            accept=".csv"
+            onChange={(e) => onFileChange(e.target.files?.[0] ?? null)}
+            disabled={uploading}
+            className="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-green-500 disabled:opacity-60"
+          />
+          {file && (
+            <p className="mt-2 text-xs font-semibold text-slate-500">
+              Selected: {file.name}
+            </p>
+          )}
+        </div>
+
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={uploading}
+            className="rounded-xl bg-slate-100 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-60"
+          >
+            Cancel
+          </button>
+
+          <button
+            type="button"
+            onClick={onUpload}
+            disabled={uploading || !file}
+            className="rounded-xl bg-green-600 px-4 py-2 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-60"
+          >
+            {uploading ? "Uploading..." : "Upload CSV"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

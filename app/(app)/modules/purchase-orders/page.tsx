@@ -102,6 +102,25 @@ const emptyMasterLineItem = {
 };
 
 const defaultLineCatalog: LineCatalogItem[] = [];
+
+const defaultPoStatuses = [
+  "Draft",
+  "Pending Review",
+  "Submitted",
+  "Under Approval",
+  "Approved",
+  "Issued",
+  "Issued to Vendor",
+  "Partially Delivered",
+  "Delivered",
+  "Invoiced",
+  "Paid",
+  "On Hold",
+  "Rejected",
+  "Cancelled",
+  "Closed",
+];
+
 export default function PurchaseOrdersPage() {
   const fileRef = useRef<HTMLInputElement | null>(null);
   const lineMasterFileRef = useRef<HTMLInputElement | null>(null);
@@ -170,40 +189,68 @@ export default function PurchaseOrdersPage() {
       return null;
     }
 
-    const { data: membership, error: membershipError } = await supabase
-      .from("workspace_members")
-      .select("workspace_id,status")
-      .eq("user_id", user.id)
-      .limit(1)
-      .maybeSingle();
+    // Global safety: every protected module should repair/create workspace
+    // before reading module data. This handles first-time users and old users.
+    const { data: ensuredWorkspaceId, error: ensureError } = await supabase.rpc(
+      "ensure_user_workspace",
+    );
 
-    if (membershipError) {
-      setContextError(membershipError.message);
+    if (ensureError) {
+      setContextError(ensureError.message);
       return null;
     }
 
-    if (!membership?.workspace_id) {
+    if (!ensuredWorkspaceId) {
       setContextError("No active workspace found for this user.");
-      return null;
-    }
-
-    if (
-      membership.status &&
-      String(membership.status).toLowerCase() !== "active"
-    ) {
-      setContextError("Your workspace membership is not active.");
       return null;
     }
 
     const nextCtx = {
       userId: user.id,
-      workspaceId: String(membership.workspace_id),
+      workspaceId: String(ensuredWorkspaceId),
     };
 
     setCtx(nextCtx);
     setContextError("");
 
     return nextCtx;
+  }
+
+  async function seedDefaultPoStatuses(currentCtx: WorkspaceContext) {
+    const payload = defaultPoStatuses.map((name) => ({
+      name,
+      workspace_id: currentCtx.workspaceId,
+      created_by: currentCtx.userId,
+    }));
+
+    // We already removed global unique constraints, but this prevents duplicate
+    // default rows for the same user if the seed runs more than once.
+    const { data: existingRows, error: existingError } = await supabase
+      .from("po_statuses")
+      .select("name")
+      .eq("workspace_id", currentCtx.workspaceId)
+      .eq("created_by", currentCtx.userId);
+
+    if (existingError) {
+      console.warn("PO status pre-seed check failed:", existingError.message);
+      return;
+    }
+
+    const existingNames = new Set(
+      (existingRows ?? []).map((row: any) => String(row.name).toLowerCase()),
+    );
+
+    const missing = payload.filter(
+      (row) => !existingNames.has(row.name.toLowerCase()),
+    );
+
+    if (!missing.length) return;
+
+    const { error } = await supabase.from("po_statuses").insert(missing);
+
+    if (error) {
+      console.warn("Default PO statuses seed failed:", error.message);
+    }
   }
 
   async function loadAll() {
@@ -247,6 +294,7 @@ export default function PurchaseOrdersPage() {
       `,
       )
       .eq("workspace_id", scopedCtx.workspaceId)
+      .eq("created_by", scopedCtx.userId)
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -306,18 +354,41 @@ export default function PurchaseOrdersPage() {
     const scopedCtx = currentCtx ?? (await getWorkspaceContext());
     if (!scopedCtx) return;
 
-    const { data, error } = await supabase
-      .from("po_statuses")
-      .select("id,name")
-      .eq("workspace_id", scopedCtx.workspaceId)
-      .eq("created_by", scopedCtx.userId)
-      .order("name", { ascending: true });
+    const fetchStatuses = async () => {
+      return supabase
+        .from("po_statuses")
+        .select("id,name")
+        .eq("workspace_id", scopedCtx.workspaceId)
+        .eq("created_by", scopedCtx.userId)
+        .order("id", { ascending: true });
+    };
+
+    let { data, error } = await fetchStatuses();
 
     if (error) {
+      console.error("PO statuses fetch error:", error);
       alert(error.message);
+      setStatuses([]);
       return;
     }
 
+    // First-time user safety: if the current user has no statuses yet,
+    // create generic project-management PO statuses and fetch again.
+    if (!data?.length) {
+      await seedDefaultPoStatuses(scopedCtx);
+      const retry = await fetchStatuses();
+      data = retry.data;
+      error = retry.error;
+
+      if (error) {
+        console.error("PO statuses fetch retry error:", error);
+        alert(error.message);
+        setStatuses([]);
+        return;
+      }
+    }
+
+    console.log("Loaded PO statuses:", data);
     setStatuses(data ?? []);
   }
 
@@ -668,6 +739,7 @@ export default function PurchaseOrdersPage() {
         .from("purchase_orders")
         .select("id")
         .eq("workspace_id", currentCtx.workspaceId)
+        .eq("created_by", currentCtx.userId)
         .eq("po_no", cleanPoNo)
         .maybeSingle();
 
@@ -702,6 +774,7 @@ export default function PurchaseOrdersPage() {
         .from("purchase_orders")
         .delete()
         .eq("workspace_id", currentCtx.workspaceId)
+        .eq("created_by", currentCtx.userId)
         .eq("po_no", editingPoNo);
 
       if (deleteError) return alert(deleteError.message);
@@ -732,6 +805,7 @@ export default function PurchaseOrdersPage() {
       .from("purchase_orders")
       .delete()
       .eq("workspace_id", currentCtx.workspaceId)
+      .eq("created_by", currentCtx.userId)
       .eq("po_no", poNo);
 
     if (error) return alert(error.message);
