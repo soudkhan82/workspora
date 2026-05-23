@@ -36,6 +36,7 @@ type PurchaseOrder = {
 };
 
 type DropdownType = "vendor" | "project" | "status";
+type CsvImportMode = "append" | "overwrite";
 
 type PoHeaderForm = {
   po_no: string;
@@ -148,6 +149,11 @@ export default function PurchaseOrdersPage() {
     string[]
   >([]);
   const [lineMasterSearch, setLineMasterSearch] = useState("");
+  const [lineMasterCsvModeModalOpen, setLineMasterCsvModeModalOpen] =
+    useState(false);
+  const [lineMasterPendingMode, setLineMasterPendingMode] =
+    useState<CsvImportMode>("append");
+  const [lineMasterUploadLoading, setLineMasterUploadLoading] = useState(false);
   const [editingPoNo, setEditingPoNo] = useState<string | null>(null);
 
   const [lineItemModalOpen, setLineItemModalOpen] = useState(false);
@@ -1142,64 +1148,182 @@ export default function PurchaseOrdersPage() {
     URL.revokeObjectURL(url);
   }
 
-  async function handleLineItemsCsvUpload(file: File) {
+  function openLineMasterCsvModeModal() {
+    setLineMasterCsvModeModalOpen(true);
+  }
+
+  function chooseLineMasterCsvMode(mode: CsvImportMode) {
+    setLineMasterPendingMode(mode);
+    setLineMasterCsvModeModalOpen(false);
+
+    // Wait one paint so the mode dialog closes before native file picker opens.
+    window.setTimeout(() => {
+      lineMasterFileRef.current?.click();
+    }, 0);
+  }
+
+  async function handleLineItemsCsvUpload(file: File, mode: CsvImportMode) {
     const currentCtx = await getWorkspaceContext();
     if (!currentCtx) return;
 
-    const text = await file.text();
-    const rows = parseCsv(text);
+    setLineMasterUploadLoading(true);
 
-    if (rows.length < 2) {
-      alert("CSV has no data rows.");
-      return;
-    }
+    try {
+      const text = await file.text();
+      const rows = parseCsv(text);
 
-    const headers = rows[0].map((h) => h.trim().toLowerCase());
-    const get = (row: string[], keys: string[]) => {
-      for (const key of keys) {
-        const idx = headers.indexOf(key);
-        if (idx >= 0) return row[idx] ?? "";
+      if (rows.length < 2) {
+        alert("CSV has no data rows.");
+        return;
       }
-      return "";
-    };
 
-    const payload = rows
-      .slice(1)
-      .filter((row) => row.some(Boolean))
-      .map((row) => ({
-        line_code: get(row, ["line_code", "code"]).trim(),
-        line_item: get(row, [
-          "line_item",
-          "item_description",
-          "description",
-        ]).trim(),
-        unit_of_measurement: get(row, [
-          "unit_of_measurement",
-          "uom",
-          "unit",
-        ]).trim(),
-        unit_price: Number(get(row, ["unit_price", "price"]) || 0),
-        workspace_id: currentCtx.workspaceId,
-        created_by: currentCtx.userId,
-      }))
-      .filter(
-        (item) => item.line_code && item.line_item && item.unit_of_measurement,
+      const headers = rows[0].map((h) => h.trim().toLowerCase());
+      const get = (row: string[], keys: string[]) => {
+        for (const key of keys) {
+          const idx = headers.indexOf(key);
+          if (idx >= 0) return row[idx] ?? "";
+        }
+        return "";
+      };
+
+      const rawPayload = rows
+        .slice(1)
+        .filter((row) => row.some(Boolean))
+        .map((row) => ({
+          line_code: get(row, ["line_code", "code"]).trim(),
+          line_item: get(row, [
+            "line_item",
+            "item_description",
+            "description",
+          ]).trim(),
+          unit_of_measurement: get(row, [
+            "unit_of_measurement",
+            "uom",
+            "unit",
+          ]).trim(),
+          unit_price: Number(get(row, ["unit_price", "price"]) || 0),
+          workspace_id: currentCtx.workspaceId,
+          created_by: currentCtx.userId,
+        }))
+        .filter(
+          (item) =>
+            item.line_code && item.line_item && item.unit_of_measurement,
+        );
+
+      // Remove duplicate line_code rows inside the uploaded CSV.
+      // Last CSV row wins, so the final payload is clean before DB write.
+      const payload = Array.from(
+        new Map(
+          rawPayload.map((item) => [item.line_code.toLowerCase(), item]),
+        ).values(),
       );
 
-    if (!payload.length) {
+      if (!payload.length) {
+        alert(
+          "No valid rows found. Required columns: line_code, line_item, unit_of_measurement, unit_price.",
+        );
+        return;
+      }
+
+      if (mode === "overwrite") {
+        const confirmed = confirm(
+          `Overwrite will delete all existing PO line item master records for this workspace and replace them with ${payload.length} uploaded row(s). Continue?`,
+        );
+
+        if (!confirmed) return;
+
+        const { error: deleteError } = await supabase
+          .from("line_items_master")
+          .delete()
+          .eq("workspace_id", currentCtx.workspaceId)
+          .eq("created_by", currentCtx.userId);
+
+        if (deleteError) {
+          alert(deleteError.message);
+          return;
+        }
+
+        const { error: insertError } = await supabase
+          .from("line_items_master")
+          .insert(payload);
+
+        if (insertError) {
+          alert(insertError.message);
+          return;
+        }
+
+        alert(
+          `${payload.length} line item(s) uploaded successfully. Existing master data was overwritten.`,
+        );
+        setSelectedMasterLineCodes([]);
+        await loadLineItemsMaster(currentCtx);
+        return;
+      }
+
+      const { data: existingRows, error: existingError } = await supabase
+        .from("line_items_master")
+        .select("line_code")
+        .eq("workspace_id", currentCtx.workspaceId)
+        .eq("created_by", currentCtx.userId);
+
+      if (existingError) {
+        alert(existingError.message);
+        return;
+      }
+
+      const existingCodes = new Set(
+        (existingRows ?? []).map((row: any) =>
+          String(row.line_code ?? "")
+            .trim()
+            .toLowerCase(),
+        ),
+      );
+
+      const toUpdate = payload.filter((item) =>
+        existingCodes.has(item.line_code.toLowerCase()),
+      );
+      const toInsert = payload.filter(
+        (item) => !existingCodes.has(item.line_code.toLowerCase()),
+      );
+
+      for (const item of toUpdate) {
+        const { error: updateError } = await supabase
+          .from("line_items_master")
+          .update({
+            line_item: item.line_item,
+            unit_of_measurement: item.unit_of_measurement,
+            unit_price: item.unit_price,
+          })
+          .eq("workspace_id", currentCtx.workspaceId)
+          .eq("created_by", currentCtx.userId)
+          .eq("line_code", item.line_code);
+
+        if (updateError) {
+          alert(updateError.message);
+          return;
+        }
+      }
+
+      if (toInsert.length) {
+        const { error: insertError } = await supabase
+          .from("line_items_master")
+          .insert(toInsert);
+
+        if (insertError) {
+          alert(insertError.message);
+          return;
+        }
+      }
+
       alert(
-        "No valid rows found. Required columns: line_code, line_item, unit_of_measurement, unit_price.",
+        `${payload.length} line item(s) processed successfully. ${toInsert.length} added, ${toUpdate.length} updated.`,
       );
-      return;
+      await loadLineItemsMaster(currentCtx);
+    } finally {
+      setLineMasterUploadLoading(false);
+      setLineMasterPendingMode("append");
+      if (lineMasterFileRef.current) lineMasterFileRef.current.value = "";
     }
-
-    const { error } = await supabase.from("line_items_master").insert(payload);
-
-    if (error) return alert(error.message);
-
-    alert(`${payload.length} line item(s) uploaded successfully.`);
-    await loadLineItemsMaster(currentCtx);
-    if (lineMasterFileRef.current) lineMasterFileRef.current.value = "";
   }
 
   function getDropdownItems() {
@@ -1772,15 +1896,54 @@ export default function PurchaseOrdersPage() {
                     className="hidden"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
-                      if (file) handleLineItemsCsvUpload(file);
+                      if (file)
+                        handleLineItemsCsvUpload(file, lineMasterPendingMode);
                     }}
                   />
                   <button
-                    onClick={() => lineMasterFileRef.current?.click()}
+                    onClick={openLineMasterCsvModeModal}
                     className="topBtn"
                   >
                     Upload CSV
                   </button>
+                </div>
+              </div>
+
+              <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div className="rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
+                  <p className="text-[11px] font-extrabold uppercase tracking-wide text-slate-500">
+                    Total Line Items
+                  </p>
+                  <p className="mt-2 text-3xl font-extrabold text-slate-950">
+                    {formatNumber(masterLineItems.length)}
+                  </p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    Available in database
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
+                  <p className="text-[11px] font-extrabold uppercase tracking-wide text-slate-500">
+                    Showing Now
+                  </p>
+                  <p className="mt-2 text-3xl font-extrabold text-slate-950">
+                    {formatNumber(filteredMasterLineItems.length)}
+                  </p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    After current search filter
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
+                  <p className="text-[11px] font-extrabold uppercase tracking-wide text-slate-500">
+                    Selected
+                  </p>
+                  <p className="mt-2 text-3xl font-extrabold text-slate-950">
+                    {formatNumber(selectedMasterLineCodes.length)}
+                  </p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    Ready for bulk action
+                  </p>
                 </div>
               </div>
 
@@ -1834,6 +1997,21 @@ export default function PurchaseOrdersPage() {
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-extrabold text-slate-950">
+                    PO Line Items Database
+                  </h3>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    Total {formatNumber(masterLineItems.length)} line item(s)
+                    available.
+                    {lineMasterSearch.trim()
+                      ? ` Showing ${formatNumber(filteredMasterLineItems.length)} matching record(s).`
+                      : ""}
+                  </p>
+                </div>
+              </div>
+
               <div className="mb-4 flex gap-3">
                 <input
                   value={lineMasterSearch}
@@ -1927,6 +2105,14 @@ export default function PurchaseOrdersPage() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {lineMasterCsvModeModalOpen && (
+        <LineItemsCsvModeModal
+          loading={lineMasterUploadLoading}
+          onClose={() => setLineMasterCsvModeModalOpen(false)}
+          onChoose={chooseLineMasterCsvMode}
+        />
       )}
 
       {dropdownModal && (
@@ -2065,6 +2251,79 @@ export default function PurchaseOrdersPage() {
           background: rgb(4 120 87);
         }
       `}</style>
+    </div>
+  );
+}
+
+function LineItemsCsvModeModal({
+  loading,
+  onClose,
+  onChoose,
+}: {
+  loading: boolean;
+  onClose: () => void;
+  onChoose: (mode: CsvImportMode) => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/50 px-4">
+      <div className="w-full max-w-3xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+          <div>
+            <h3 className="text-xl font-extrabold text-slate-950">
+              Upload PO Line Items
+            </h3>
+            <p className="mt-1 text-xs text-slate-500">
+              Choose how the CSV should be applied to Line Item Master.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            disabled={loading}
+            className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="space-y-4 p-6">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => onChoose("append")}
+              className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-left shadow-sm transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <div className="text-base font-extrabold text-emerald-800">
+                Append / Update
+              </div>
+              <p className="mt-2 text-sm leading-6 text-emerald-900/80">
+                Add new line codes and update matching existing line codes.
+                Existing unmatched records will remain unchanged.
+              </p>
+            </button>
+
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => onChoose("overwrite")}
+              className="rounded-2xl border border-red-200 bg-red-50 p-5 text-left shadow-sm transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <div className="text-base font-extrabold text-red-700">
+                Overwrite Existing
+              </div>
+              <p className="mt-2 text-sm leading-6 text-red-900/80">
+                Delete current PO line item master records for this workspace,
+                then import the uploaded CSV as the new master list.
+              </p>
+            </button>
+          </div>
+
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-semibold leading-5 text-amber-800">
+            Use Append / Update for normal imports. Use Overwrite only when you
+            want the uploaded file to fully replace the existing master list.
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
