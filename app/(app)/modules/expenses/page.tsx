@@ -400,21 +400,32 @@ export default function ExpensesPage() {
     return Array.from(map.values()).sort((a, b) => b.amount - a.amount);
   }, [expenses]);
 
-  const monthlyTrend = useMemo(() => {
-    const map = new Map<
+  const monthlyTrendByCurrency = useMemo(() => {
+    const currencyMap = new Map<
       string,
-      {
-        month: string;
-        amount: number;
-        count: number;
-      }
+      Map<
+        string,
+        {
+          month: string;
+          amount: number;
+          count: number;
+        }
+      >
     >();
 
     expenses.forEach((expense) => {
       const month = String(expense.expense_date || "").slice(0, 7);
       if (!month) return;
 
-      const previous = map.get(month) || {
+      const currency = expense.currency || "USD";
+
+      if (!currencyMap.has(currency)) {
+        currencyMap.set(currency, new Map());
+      }
+
+      const monthMap = currencyMap.get(currency)!;
+
+      const previous = monthMap.get(month) || {
         month,
         amount: 0,
         count: 0,
@@ -423,12 +434,33 @@ export default function ExpensesPage() {
       previous.amount += Number(expense.amount || 0);
       previous.count += 1;
 
-      map.set(month, previous);
+      monthMap.set(month, previous);
     });
 
-    return Array.from(map.values()).sort((a, b) =>
-      a.month.localeCompare(b.month),
-    );
+    return Array.from(currencyMap.entries())
+      .map(([currency, monthMap]) => {
+        const data = Array.from(monthMap.values()).sort((a, b) =>
+          a.month.localeCompare(b.month),
+        );
+
+        const totalAmount = data.reduce(
+          (sum, item) => sum + Number(item.amount || 0),
+          0,
+        );
+
+        const totalCount = data.reduce(
+          (sum, item) => sum + Number(item.count || 0),
+          0,
+        );
+
+        return {
+          currency,
+          data,
+          totalAmount,
+          totalCount,
+        };
+      })
+      .sort((a, b) => b.totalAmount - a.totalAmount);
   }, [expenses]);
 
   const topCategoriesForChart = useMemo(() => {
@@ -1183,49 +1215,95 @@ export default function ExpensesPage() {
 
           <div className="space-y-6 lg:col-span-8">
             <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <div className="flex items-center justify-between">
-                <h2 className="text-xl font-bold text-slate-950">
-                  Time Series Trend
-                </h2>
-                <span className="text-xs font-medium text-slate-500">
-                  Monthly expense trend
-                </span>
-              </div>
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-xl font-bold text-slate-950">
+                      Time Series Trend
+                    </h2>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Monthly trend separated by currency
+                    </p>
+                  </div>
 
-              <div className="mt-5 h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={monthlyTrend}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis
-                      dataKey="month"
-                      stroke="#64748b"
-                      tick={{ fill: "#64748b", fontSize: 12 }}
-                    />
-                    <YAxis
-                      stroke="#64748b"
-                      tick={{ fill: "#64748b", fontSize: 12 }}
-                    />
-                    <Tooltip
-                      contentStyle={{
-                        background: "#ffffff",
-                        border: "1px solid #cbd5e1",
-                        borderRadius: "12px",
-                        color: "#020617",
-                      }}
-                      formatter={(value: any) => [
-                        Number(value || 0).toLocaleString(),
-                        "Amount",
-                      ]}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="amount"
-                      stroke="#059669"
-                      fill="#d1fae5"
-                      strokeWidth={3}
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
+                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">
+                    {monthlyTrendByCurrency.length} currencies
+                  </span>
+                </div>
+
+                {monthlyTrendByCurrency.length ? (
+                  <div className="mt-5 grid gap-4 xl:grid-cols-2">
+                    {monthlyTrendByCurrency.map((item) => (
+                      <div
+                        key={item.currency}
+                        className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
+                      >
+                        <div className="mb-3 flex items-start justify-between gap-3">
+                          <div>
+                            <h3 className="text-sm font-bold text-slate-950">
+                              {item.currency} Trend
+                            </h3>
+                            <p className="mt-1 text-xs text-slate-500">
+                              {item.totalCount.toLocaleString()} records
+                            </p>
+                          </div>
+
+                          <div className="rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-700 shadow-sm">
+                            {item.currency}{" "}
+                            {Number(item.totalAmount || 0).toLocaleString()}
+                          </div>
+                        </div>
+
+                        <div className="h-56">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={item.data}>
+                              <CartesianGrid
+                                strokeDasharray="3 3"
+                                stroke="#e2e8f0"
+                              />
+                              <XAxis
+                                dataKey="month"
+                                stroke="#64748b"
+                                tick={{ fill: "#64748b", fontSize: 11 }}
+                              />
+                              <YAxis
+                                stroke="#64748b"
+                                tick={{ fill: "#64748b", fontSize: 11 }}
+                                tickFormatter={(value) =>
+                                  Number(value || 0).toLocaleString()
+                                }
+                              />
+                              <Tooltip
+                                contentStyle={{
+                                  background: "#ffffff",
+                                  border: "1px solid #cbd5e1",
+                                  borderRadius: "12px",
+                                  color: "#020617",
+                                }}
+                                formatter={(value: any) => [
+                                  `${item.currency} ${Number(value || 0).toLocaleString()}`,
+                                  "Amount",
+                                ]}
+                                labelFormatter={(label) => `Month: ${label}`}
+                              />
+                              <Area
+                                type="monotone"
+                                dataKey="amount"
+                                stroke="#059669"
+                                fill="#d1fae5"
+                                strokeWidth={3}
+                              />
+                            </AreaChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">
+                    No expense trend available yet.
+                  </div>
+                )}
               </div>
             </div>
 
