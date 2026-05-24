@@ -53,6 +53,8 @@ type FormState = {
   vendor: string;
 };
 
+type UploadMode = "append" | "overwrite";
+
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
 const CURRENCIES = [
@@ -91,6 +93,7 @@ function parseAmount(value: string) {
   const cleaned = String(value || "")
     .replace(/,/g, "")
     .trim();
+
   const parsed = Number(cleaned);
   return Number.isFinite(parsed) ? parsed : 0;
 }
@@ -152,6 +155,9 @@ export default function ExpensesPage() {
 
   const [newCategoryName, setNewCategoryName] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedExpenseIds, setSelectedExpenseIds] = useState<Set<string>>(
+    new Set(),
+  );
 
   const [viewExpense, setViewExpense] = useState<ExpenseRow | null>(null);
   const [editExpense, setEditExpense] = useState<ExpenseRow | null>(null);
@@ -160,6 +166,10 @@ export default function ExpensesPage() {
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState("");
+
+  const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
+  const [uploadMode, setUploadMode] = useState<UploadMode>("append");
+  const [selectedCsvFile, setSelectedCsvFile] = useState<File | null>(null);
 
   const selectedCurrency = form.currency || "USD";
 
@@ -277,9 +287,11 @@ export default function ExpensesPage() {
 
   const categoryMap = useMemo(() => {
     const map = new Map<string, ExpenseCategory>();
+
     categories.forEach((category) => {
       map.set(category.name.trim().toLowerCase(), category);
     });
+
     return map;
   }, [categories]);
 
@@ -302,6 +314,32 @@ export default function ExpensesPage() {
         .includes(q);
     });
   }, [expenses, searchTerm]);
+
+  const filteredExpenseIds = useMemo(() => {
+    return filteredExpenses.map((expense) => String(expense.id));
+  }, [filteredExpenses]);
+
+  const selectedCount = selectedExpenseIds.size;
+
+  const allFilteredSelected = useMemo(() => {
+    return (
+      filteredExpenseIds.length > 0 &&
+      filteredExpenseIds.every((id) => selectedExpenseIds.has(id))
+    );
+  }, [filteredExpenseIds, selectedExpenseIds]);
+
+  useEffect(() => {
+    setSelectedExpenseIds((previous) => {
+      const validIds = new Set(expenses.map((expense) => String(expense.id)));
+      const next = new Set<string>();
+
+      previous.forEach((id) => {
+        if (validIds.has(id)) next.add(id);
+      });
+
+      return next;
+    });
+  }, [expenses]);
 
   const categorySummary = useMemo(() => {
     const map = new Map<
@@ -546,6 +584,77 @@ export default function ExpensesPage() {
     }
   };
 
+  const toggleExpenseSelection = (id: number | string) => {
+    const normalizedId = String(id);
+
+    setSelectedExpenseIds((previous) => {
+      const next = new Set(previous);
+
+      if (next.has(normalizedId)) {
+        next.delete(normalizedId);
+      } else {
+        next.add(normalizedId);
+      }
+
+      return next;
+    });
+  };
+
+  const toggleAllFilteredExpenses = () => {
+    setSelectedExpenseIds((previous) => {
+      const next = new Set(previous);
+
+      if (allFilteredSelected) {
+        filteredExpenseIds.forEach((id) => next.delete(id));
+      } else {
+        filteredExpenseIds.forEach((id) => next.add(id));
+      }
+
+      return next;
+    });
+  };
+
+  const handleBulkDeleteExpenses = async () => {
+    if (!workspaceId) return;
+
+    const ids = Array.from(selectedExpenseIds);
+
+    if (!ids.length) {
+      setMessage("Please select at least one expense record.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete ${ids.length} selected expense record${ids.length === 1 ? "" : "s"}?`,
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setSaving(true);
+      setMessage("");
+
+      const { error } = await supabase
+        .from("expenses")
+        .delete()
+        .eq("workspace_id", workspaceId)
+        .in("id", ids);
+
+      if (error) throw error;
+
+      setSelectedExpenseIds(new Set());
+      await loadExpenses(workspaceId);
+
+      setMessage(
+        `${ids.length} expense record${ids.length === 1 ? "" : "s"} deleted.`,
+      );
+    } catch (error: any) {
+      setMessage(error?.message || "Unable to delete selected expenses.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleDeleteExpense = async (id: number | string) => {
     const confirmed = window.confirm("Delete this expense?");
     if (!confirmed || !workspaceId) return;
@@ -561,6 +670,12 @@ export default function ExpensesPage() {
         .eq("workspace_id", workspaceId);
 
       if (error) throw error;
+
+      setSelectedExpenseIds((previous) => {
+        const next = new Set(previous);
+        next.delete(String(id));
+        return next;
+      });
 
       await loadExpenses(workspaceId);
       setMessage("Expense deleted.");
@@ -581,7 +696,31 @@ export default function ExpensesPage() {
       "vendor",
     ];
 
-    const csv = `${headers.join(",")}\n`;
+    const sampleRows = [
+      [
+        "Travel",
+        "PKR",
+        "15000",
+        todayIso(),
+        "Client visit travel expense",
+        "Careem",
+      ],
+      [
+        "Software",
+        "USD",
+        "49",
+        todayIso(),
+        "Monthly SaaS subscription",
+        "OpenAI",
+      ],
+    ];
+
+    const csv = [
+      headers.join(","),
+      ...sampleRows.map((row) =>
+        row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(","),
+      ),
+    ].join("\n");
 
     const blob = new Blob([csv], {
       type: "text/csv;charset=utf-8;",
@@ -597,9 +736,21 @@ export default function ExpensesPage() {
     URL.revokeObjectURL(url);
   };
 
-  const handleUploadCsv = async (file: File | null) => {
+  const handleUploadCsv = async (
+    file: File | null,
+    mode: UploadMode = "append",
+  ) => {
     try {
       if (!file || !workspaceId || !userId) return;
+
+      const confirmed =
+        mode === "overwrite"
+          ? window.confirm(
+              "Overwrite will delete all existing expense records in this workspace before uploading the CSV. Continue?",
+            )
+          : true;
+
+      if (!confirmed) return;
 
       setUploading(true);
       setMessage("");
@@ -642,7 +793,7 @@ export default function ExpensesPage() {
         return index >= 0 ? values[index]?.trim() || "" : "";
       };
 
-      const categoriesToCreate = new Set<string>();
+      const categoriesToCreate = new Map<string, string>();
 
       const parsedRows = lines.slice(1).map((line) => {
         const values = parseCsvLine(line);
@@ -654,8 +805,10 @@ export default function ExpensesPage() {
         const description = getValue(values, "description");
         const vendor = getValue(values, "vendor");
 
-        if (category && !categoryMap.has(category.toLowerCase())) {
-          categoriesToCreate.add(category);
+        const normalizedCategory = category.trim().toLowerCase();
+
+        if (category && !categoryMap.has(normalizedCategory)) {
+          categoriesToCreate.set(normalizedCategory, category.trim());
         }
 
         return {
@@ -680,11 +833,13 @@ export default function ExpensesPage() {
       }
 
       if (categoriesToCreate.size > 0) {
-        const categoryPayload = Array.from(categoriesToCreate).map((name) => ({
-          workspace_id: workspaceId,
-          created_by: userId,
-          name,
-        }));
+        const categoryPayload = Array.from(categoriesToCreate.values()).map(
+          (name) => ({
+            workspace_id: workspaceId,
+            created_by: userId,
+            name,
+          }),
+        );
 
         const { error: categoryError } = await supabase
           .from("expense_categories")
@@ -725,6 +880,15 @@ export default function ExpensesPage() {
         };
       });
 
+      if (mode === "overwrite") {
+        const { error: deleteError } = await supabase
+          .from("expenses")
+          .delete()
+          .eq("workspace_id", workspaceId);
+
+        if (deleteError) throw deleteError;
+      }
+
       const { error: expenseError } = await supabase
         .from("expenses")
         .insert(expensePayload);
@@ -736,7 +900,15 @@ export default function ExpensesPage() {
         loadExpenses(workspaceId),
       ]);
 
-      setMessage(`CSV uploaded. ${expensePayload.length} expenses added.`);
+      setSelectedCsvFile(null);
+      setUploadDialogOpen(false);
+      setUploadMode("append");
+
+      setMessage(
+        mode === "overwrite"
+          ? `CSV uploaded in overwrite mode. Existing expenses were replaced with ${expensePayload.length} records.`
+          : `CSV uploaded in append mode. ${expensePayload.length} expenses added.`,
+      );
     } catch (error: any) {
       setMessage(error?.message || "Unable to upload CSV.");
     } finally {
@@ -785,20 +957,18 @@ export default function ExpensesPage() {
               Download CSV Template
             </button>
 
-            <label className="cursor-pointer rounded-xl border border-slate-300 bg-white px-5 py-3 text-sm font-bold text-slate-950 shadow-sm hover:bg-slate-50">
+            <button
+              type="button"
+              onClick={() => {
+                setUploadDialogOpen(true);
+                setUploadMode("append");
+                setSelectedCsvFile(null);
+              }}
+              disabled={uploading}
+              className="rounded-xl border border-slate-300 bg-white px-5 py-3 text-sm font-bold text-slate-950 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
               {uploading ? "Uploading..." : "Upload CSV"}
-              <input
-                type="file"
-                accept=".csv,text/csv"
-                className="hidden"
-                disabled={uploading}
-                onChange={(event) => {
-                  const file = event.target.files?.[0] || null;
-                  handleUploadCsv(file);
-                  event.target.value = "";
-                }}
-              />
-            </label>
+            </button>
           </div>
         </section>
 
@@ -1169,24 +1339,40 @@ export default function ExpensesPage() {
                 </h2>
                 <p className="mt-1 text-xs text-slate-500">
                   Showing {filteredExpenses.length} of {expenses.length} records
+                  {selectedCount > 0 ? ` • ${selectedCount} selected` : ""}
                 </p>
               </div>
 
-              <div className="flex w-full gap-2 md:w-[460px]">
-                <input
-                  value={searchTerm}
-                  onChange={(event) => setSearchTerm(event.target.value)}
-                  placeholder="Search category, vendor, date, amount..."
-                  className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-950 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                />
+              <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row md:items-center">
+                {selectedCount > 0 ? (
+                  <button
+                    type="button"
+                    onClick={handleBulkDeleteExpenses}
+                    disabled={saving}
+                    className="rounded-xl bg-red-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {saving
+                      ? "Deleting..."
+                      : `Delete Selected (${selectedCount})`}
+                  </button>
+                ) : null}
 
-                <button
-                  type="button"
-                  onClick={() => setSearchTerm("")}
-                  className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-bold text-slate-950 hover:bg-slate-50"
-                >
-                  Reset
-                </button>
+                <div className="flex w-full gap-2 md:w-[460px]">
+                  <input
+                    value={searchTerm}
+                    onChange={(event) => setSearchTerm(event.target.value)}
+                    placeholder="Search category, vendor, date, amount..."
+                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-950 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  />
+
+                  <button
+                    type="button"
+                    onClick={() => setSearchTerm("")}
+                    className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-bold text-slate-950 hover:bg-slate-50"
+                  >
+                    Reset
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -1194,76 +1380,105 @@ export default function ExpensesPage() {
               <table className="w-full table-fixed text-left text-sm">
                 <thead className="sticky top-0 bg-slate-950 text-[11px] uppercase tracking-wide text-white">
                   <tr>
-                    <th className="w-[14%] px-3 py-3">Date</th>
-                    <th className="w-[22%] px-3 py-3">Category</th>
-                    <th className="w-[20%] px-3 py-3">Vendor</th>
-                    <th className="w-[19%] px-3 py-3 text-right">Amount</th>
+                    <th className="w-[6%] px-3 py-3 text-center">
+                      <input
+                        type="checkbox"
+                        checked={allFilteredSelected}
+                        onChange={toggleAllFilteredExpenses}
+                        className="h-4 w-4 cursor-pointer rounded border-slate-300 accent-emerald-600"
+                        aria-label="Select all visible expenses"
+                      />
+                    </th>
+                    <th className="w-[13%] px-3 py-3">Date</th>
+                    <th className="w-[21%] px-3 py-3">Category</th>
+                    <th className="w-[18%] px-3 py-3">Vendor</th>
+                    <th className="w-[17%] px-3 py-3 text-right">Amount</th>
                     <th className="w-[25%] px-3 py-3 text-right">Actions</th>
                   </tr>
                 </thead>
 
                 <tbody className="divide-y divide-slate-200 bg-white">
                   {filteredExpenses.length ? (
-                    filteredExpenses.map((expense) => (
-                      <tr key={expense.id}>
-                        <td className="whitespace-nowrap px-3 py-3 text-slate-700">
-                          {expense.expense_date}
-                        </td>
+                    filteredExpenses.map((expense) => {
+                      const expenseId = String(expense.id);
+                      const isSelected = selectedExpenseIds.has(expenseId);
 
-                        <td
-                          className="truncate px-3 py-3 font-medium text-slate-950"
-                          title={getExpenseCategoryName(expense)}
+                      return (
+                        <tr
+                          key={expense.id}
+                          className={isSelected ? "bg-emerald-50" : "bg-white"}
                         >
-                          {getExpenseCategoryName(expense)}
-                        </td>
+                          <td className="px-3 py-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() =>
+                                toggleExpenseSelection(expense.id)
+                              }
+                              className="h-4 w-4 cursor-pointer rounded border-slate-300 accent-emerald-600"
+                              aria-label={`Select expense ${expense.id}`}
+                            />
+                          </td>
 
-                        <td
-                          className="truncate px-3 py-3 text-slate-600"
-                          title={expense.vendor || "-"}
-                        >
-                          {expense.vendor || "-"}
-                        </td>
+                          <td className="whitespace-nowrap px-3 py-3 text-slate-700">
+                            {expense.expense_date}
+                          </td>
 
-                        <td className="whitespace-nowrap px-3 py-3 text-right font-bold text-slate-950">
-                          {formatAmount(
-                            Number(expense.amount || 0),
-                            expense.currency || "USD",
-                          )}
-                        </td>
+                          <td
+                            className="truncate px-3 py-3 font-medium text-slate-950"
+                            title={getExpenseCategoryName(expense)}
+                          >
+                            {getExpenseCategoryName(expense)}
+                          </td>
 
-                        <td className="whitespace-nowrap px-3 py-3 text-right">
-                          <div className="flex justify-end gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => setViewExpense(expense)}
-                              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-950 hover:bg-slate-50"
-                            >
-                              View
-                            </button>
+                          <td
+                            className="truncate px-3 py-3 text-slate-600"
+                            title={expense.vendor || "-"}
+                          >
+                            {expense.vendor || "-"}
+                          </td>
 
-                            <button
-                              type="button"
-                              onClick={() => openEditExpense(expense)}
-                              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-950 hover:bg-slate-50"
-                            >
-                              Edit
-                            </button>
+                          <td className="whitespace-nowrap px-3 py-3 text-right font-bold text-slate-950">
+                            {formatAmount(
+                              Number(expense.amount || 0),
+                              expense.currency || "USD",
+                            )}
+                          </td>
 
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteExpense(expense.id)}
-                              className="rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-700"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
+                          <td className="whitespace-nowrap px-3 py-3 text-right">
+                            <div className="flex justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setViewExpense(expense)}
+                                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-950 hover:bg-slate-50"
+                              >
+                                View
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => openEditExpense(expense)}
+                                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-950 hover:bg-slate-50"
+                              >
+                                Edit
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteExpense(expense.id)}
+                                className="rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-700"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
                   ) : (
                     <tr>
                       <td
-                        colSpan={5}
+                        colSpan={6}
                         className="px-4 py-8 text-center text-slate-500"
                       >
                         No expenses found.
@@ -1276,6 +1491,139 @@ export default function ExpensesPage() {
           </div>
         </section>
       </div>
+
+      {uploadDialogOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4">
+          <div className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-bold text-slate-950">
+                  Upload Expenses CSV
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Select append or overwrite before uploading your expense CSV.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (uploading) return;
+                  setUploadDialogOpen(false);
+                  setSelectedCsvFile(null);
+                  setUploadMode("append");
+                }}
+                className="rounded-lg border border-slate-300 px-3 py-1 text-sm font-bold text-slate-700 hover:bg-slate-50"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-6 space-y-4">
+              <div className="grid gap-3 md:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => setUploadMode("append")}
+                  className={`rounded-2xl border px-4 py-4 text-left transition ${
+                    uploadMode === "append"
+                      ? "border-emerald-500 bg-emerald-50 ring-2 ring-emerald-100"
+                      : "border-slate-200 bg-white hover:bg-slate-50"
+                  }`}
+                >
+                  <div className="text-sm font-bold text-slate-950">Append</div>
+                  <div className="mt-1 text-xs leading-5 text-slate-500">
+                    Keep existing expenses and add CSV rows as new records.
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setUploadMode("overwrite")}
+                  className={`rounded-2xl border px-4 py-4 text-left transition ${
+                    uploadMode === "overwrite"
+                      ? "border-red-500 bg-red-50 ring-2 ring-red-100"
+                      : "border-slate-200 bg-white hover:bg-slate-50"
+                  }`}
+                >
+                  <div className="text-sm font-bold text-slate-950">
+                    Overwrite
+                  </div>
+                  <div className="mt-1 text-xs leading-5 text-slate-500">
+                    Delete existing expense records, then insert CSV rows.
+                  </div>
+                </button>
+              </div>
+
+              <div>
+                <label className="text-sm font-semibold text-slate-700">
+                  Select CSV File
+                </label>
+
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  disabled={uploading}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0] || null;
+                    setSelectedCsvFile(file);
+                  }}
+                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 file:mr-4 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-sm file:font-bold file:text-slate-700 hover:file:bg-slate-200"
+                />
+
+                {selectedCsvFile ? (
+                  <p className="mt-2 text-xs font-medium text-slate-500">
+                    Selected: {selectedCsvFile.name}
+                  </p>
+                ) : null}
+              </div>
+
+              {uploadMode === "overwrite" ? (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+                  Warning: overwrite mode will remove existing expense records
+                  in this workspace before inserting the uploaded CSV data.
+                </div>
+              ) : (
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">
+                  Append mode keeps your existing data and only adds new CSV
+                  records.
+                </div>
+              )}
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (uploading) return;
+                    setUploadDialogOpen(false);
+                    setSelectedCsvFile(null);
+                    setUploadMode("append");
+                  }}
+                  className="rounded-xl border border-slate-300 bg-white px-5 py-3 text-sm font-bold text-slate-950 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  disabled={uploading || !selectedCsvFile}
+                  onClick={() => handleUploadCsv(selectedCsvFile, uploadMode)}
+                  className={`rounded-xl px-5 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60 ${
+                    uploadMode === "overwrite"
+                      ? "bg-red-600 hover:bg-red-700"
+                      : "bg-emerald-600 hover:bg-emerald-700"
+                  }`}
+                >
+                  {uploading
+                    ? "Uploading..."
+                    : uploadMode === "overwrite"
+                      ? "Overwrite & Upload"
+                      : "Append & Upload"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {viewExpense ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4">
