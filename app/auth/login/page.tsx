@@ -299,9 +299,9 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top_left,#dcfce7_0,#f8fafc_32%,#ffffff_74%)] text-slate-950">
-      <section className="flex min-h-screen w-full items-center justify-center px-4 py-5 sm:px-6 lg:px-8">
-        <div className="grid h-[calc(100vh-56px)] min-h-[610px] w-full max-w-[1380px] items-center gap-7 lg:grid-cols-[minmax(0,1.08fr)_420px] xl:gap-8">
+    <main className="min-h-dvh w-full overflow-x-hidden overflow-y-auto bg-[radial-gradient(circle_at_top_left,#dcfce7_0,#f8fafc_32%,#ffffff_74%)] text-slate-950">
+      <section className="flex min-h-dvh w-full items-start justify-center px-4 py-4 sm:px-6 sm:py-6 lg:items-center lg:px-8">
+        <div className="grid w-full max-w-[1380px] items-center gap-6 lg:min-h-[calc(100dvh-56px)] lg:grid-cols-[minmax(0,1.08fr)_420px] xl:gap-8">
           <div className="hidden h-full min-h-0 lg:block">
             <div className="flex h-full min-h-0 flex-col rounded-[2rem] border border-white/80 bg-white/72 p-4 shadow-2xl shadow-emerald-100/70 backdrop-blur-xl">
               <div className="min-h-0 flex-1 overflow-hidden rounded-[1.6rem] border border-slate-200 bg-slate-50">
@@ -352,10 +352,10 @@ export default function LoginPage() {
           </div>
 
           <div className="mx-auto flex w-full max-w-[420px] items-center lg:h-full lg:max-w-none">
-            <div className="w-full rounded-[2rem] border border-slate-200 bg-white/92 p-6 shadow-2xl shadow-slate-200/70 backdrop-blur-xl sm:p-7">
-              <div className="mb-5 block lg:hidden">
+            <div className="w-full rounded-[1.6rem] border border-slate-200 bg-white/95 p-4 shadow-2xl shadow-slate-200/70 backdrop-blur-xl sm:rounded-[2rem] sm:p-7">
+              <div className="mb-4 hidden sm:block lg:hidden">
                 <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
-                  <div className="flex h-[230px] w-full items-center justify-center overflow-hidden p-2">
+                  <div className="flex h-[170px] w-full items-center justify-center overflow-hidden p-2">
                     <img
                       src={slides[activeSlide].image}
                       alt={slides[activeSlide].title}
@@ -382,25 +382,25 @@ export default function LoginPage() {
                 </div>
               </div>
 
-              <div className="mb-5">
-                <div className="mb-4 inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
+              <div className="mb-4 sm:mb-5">
+                <div className="mb-3 inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700 sm:mb-4">
                   Workspace Control Center
                 </div>
 
-                <h1 className="text-3xl font-semibold tracking-tight text-slate-950">
+                <h1 className="text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">
                   {authMode === "login"
                     ? "Sign in to Workspora"
                     : "Create test account"}
                 </h1>
 
-                <p className="mt-3 text-sm leading-6 text-slate-500">
+                <p className="mt-2 text-sm leading-6 text-slate-500 sm:mt-3">
                   {authMode === "login"
                     ? "Access your workspace dashboard, modules, members, clients, projects and executive reports."
                     : "Create an email-password user for testing Workspora modules."}
                 </p>
               </div>
 
-              <div className="mb-5 grid grid-cols-2 rounded-2xl bg-slate-100 p-1">
+              <div className="mb-4 grid grid-cols-2 rounded-2xl bg-slate-100 p-1 sm:mb-5">
                 <button
                   type="button"
                   onClick={() => {
@@ -446,7 +446,10 @@ export default function LoginPage() {
                 </div>
               ) : null}
 
-              <form onSubmit={handleEmailAuth} className="space-y-4">
+              <form
+                onSubmit={handleEmailAuth}
+                className="space-y-3 sm:space-y-4"
+              >
                 <div>
                   <label className="mb-1.5 block text-sm font-medium text-slate-700">
                     Email
@@ -458,7 +461,7 @@ export default function LoginPage() {
                     placeholder="you@example.com"
                     autoComplete="email"
                     disabled={submitting || checkingSession}
-                    className="h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-50"
+                    className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-50 sm:h-12"
                   />
                 </div>
 
@@ -479,14 +482,14 @@ export default function LoginPage() {
                       authMode === "login" ? "current-password" : "new-password"
                     }
                     disabled={submitting || checkingSession}
-                    className="h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-50"
+                    className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-emerald-400 focus:ring-4 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-50 sm:h-12"
                   />
                 </div>
 
                 <button
                   type="submit"
                   disabled={submitting || checkingSession}
-                  className="flex h-12 w-full items-center justify-center rounded-xl bg-slate-950 px-4 text-sm font-semibold text-white shadow-lg shadow-slate-300 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="flex h-11 w-full items-center justify-center rounded-xl bg-slate-950 px-4 text-sm font-semibold text-white shadow-lg shadow-slate-300 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 sm:h-12"
                 >
                   {submitting
                     ? authMode === "login"
@@ -498,7 +501,7 @@ export default function LoginPage() {
                 </button>
               </form>
 
-              <div className="my-6 flex items-center gap-3">
+              <div className="my-4 flex items-center gap-3 sm:my-6">
                 <div className="h-px flex-1 bg-slate-200" />
                 <span className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">
                   or
@@ -510,12 +513,12 @@ export default function LoginPage() {
                 type="button"
                 onClick={handleGoogleLogin}
                 disabled={submitting || checkingSession}
-                className="flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 sm:h-12"
               >
                 Continue with Google
               </button>
 
-              <p className="mt-6 text-center text-xs leading-5 text-slate-400">
+              <p className="mt-4 text-center text-xs leading-5 text-slate-400 sm:mt-6">
                 {authMode === "login" ? (
                   <>
                     Need a test user?{" "}
