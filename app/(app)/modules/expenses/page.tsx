@@ -740,8 +740,13 @@ export default function ExpensesPage() {
     file: File | null,
     mode: UploadMode = "append",
   ) => {
+    if (uploading) return;
+
     try {
       if (!file || !workspaceId || !userId) return;
+
+      setUploading(true);
+      setMessage("");
 
       const confirmed =
         mode === "overwrite"
@@ -750,10 +755,10 @@ export default function ExpensesPage() {
             )
           : true;
 
-      if (!confirmed) return;
-
-      setUploading(true);
-      setMessage("");
+      if (!confirmed) {
+        setUploading(false);
+        return;
+      }
 
       const text = await file.text();
       const lines = text
@@ -1507,13 +1512,14 @@ export default function ExpensesPage() {
 
               <button
                 type="button"
+                disabled={uploading}
                 onClick={() => {
                   if (uploading) return;
                   setUploadDialogOpen(false);
                   setSelectedCsvFile(null);
                   setUploadMode("append");
                 }}
-                className="rounded-lg border border-slate-300 px-3 py-1 text-sm font-bold text-slate-700 hover:bg-slate-50"
+                className="rounded-lg border border-slate-300 px-3 py-1 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Close
               </button>
@@ -1523,8 +1529,12 @@ export default function ExpensesPage() {
               <div className="grid gap-3 md:grid-cols-2">
                 <button
                   type="button"
-                  onClick={() => setUploadMode("append")}
-                  className={`rounded-2xl border px-4 py-4 text-left transition ${
+                  onClick={() => {
+                    if (uploading) return;
+                    setUploadMode("append");
+                  }}
+                  disabled={uploading}
+                  className={`rounded-2xl border px-4 py-4 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
                     uploadMode === "append"
                       ? "border-emerald-500 bg-emerald-50 ring-2 ring-emerald-100"
                       : "border-slate-200 bg-white hover:bg-slate-50"
@@ -1538,8 +1548,12 @@ export default function ExpensesPage() {
 
                 <button
                   type="button"
-                  onClick={() => setUploadMode("overwrite")}
-                  className={`rounded-2xl border px-4 py-4 text-left transition ${
+                  onClick={() => {
+                    if (uploading) return;
+                    setUploadMode("overwrite");
+                  }}
+                  disabled={uploading}
+                  className={`rounded-2xl border px-4 py-4 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
                     uploadMode === "overwrite"
                       ? "border-red-500 bg-red-50 ring-2 ring-red-100"
                       : "border-slate-200 bg-white hover:bg-slate-50"
@@ -1592,13 +1606,14 @@ export default function ExpensesPage() {
               <div className="flex justify-end gap-3 pt-2">
                 <button
                   type="button"
+                  disabled={uploading}
                   onClick={() => {
                     if (uploading) return;
                     setUploadDialogOpen(false);
                     setSelectedCsvFile(null);
                     setUploadMode("append");
                   }}
-                  className="rounded-xl border border-slate-300 bg-white px-5 py-3 text-sm font-bold text-slate-950 hover:bg-slate-50"
+                  className="rounded-xl border border-slate-300 bg-white px-5 py-3 text-sm font-bold text-slate-950 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Cancel
                 </button>
@@ -1606,18 +1621,26 @@ export default function ExpensesPage() {
                 <button
                   type="button"
                   disabled={uploading || !selectedCsvFile}
-                  onClick={() => handleUploadCsv(selectedCsvFile, uploadMode)}
-                  className={`rounded-xl px-5 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60 ${
+                  onClick={() => {
+                    if (uploading || !selectedCsvFile) return;
+                    handleUploadCsv(selectedCsvFile, uploadMode);
+                  }}
+                  className={`inline-flex min-w-[170px] items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60 ${
                     uploadMode === "overwrite"
                       ? "bg-red-600 hover:bg-red-700"
                       : "bg-emerald-600 hover:bg-emerald-700"
                   }`}
                 >
-                  {uploading
-                    ? "Uploading..."
-                    : uploadMode === "overwrite"
-                      ? "Overwrite & Upload"
-                      : "Append & Upload"}
+                  {uploading ? (
+                    <>
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                      Processing...
+                    </>
+                  ) : uploadMode === "overwrite" ? (
+                    "Overwrite & Upload"
+                  ) : (
+                    "Append & Upload"
+                  )}
                 </button>
               </div>
             </div>
