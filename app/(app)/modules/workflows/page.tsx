@@ -1429,8 +1429,8 @@ export default function WorkflowsPage() {
           onAction={() => setShowWorkflowModal(true)}
         />
       ) : viewMode === "board" ? (
-        <main className="overflow-x-auto rounded-[28px] border border-slate-200 bg-slate-50/80 p-4 shadow-sm">
-          <div className="flex min-h-[560px] gap-4 pb-2">
+        <main className="h-[calc(100vh-360px)] min-h-[520px] overflow-hidden rounded-[28px] border border-slate-200 bg-slate-50/80 p-4 shadow-sm">
+          <div className="flex h-full min-h-0 gap-4 overflow-x-auto overflow-y-hidden pb-2">
             {stages.length === 0 ? (
               <div className="flex min-h-[420px] w-full items-center justify-center">
                 <EmptyState
@@ -1446,7 +1446,7 @@ export default function WorkflowsPage() {
                 return (
                   <section
                     key={stage.id}
-                    className="w-[310px] shrink-0 rounded-2xl border border-slate-200 bg-white shadow-sm"
+                    className="flex h-full min-h-0 w-[310px] shrink-0 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm"
                   >
                     <div className="rounded-t-2xl border-b border-slate-100 bg-white px-4 py-3">
                       <div className="flex items-center justify-between gap-3">
@@ -1473,7 +1473,7 @@ export default function WorkflowsPage() {
                       </div>
                     </div>
 
-                    <div className="space-y-3 p-3">
+                    <div className="workflow-column-scroll min-h-0 flex-1 space-y-3 overflow-y-auto p-3 pr-2">
                       {stageTasks.map((task) => (
                         <TaskCard
                           key={task.id}
@@ -2047,6 +2047,17 @@ export default function WorkflowsPage() {
         }
         .btn-green:hover {
           background: #047857;
+        }
+        .workflow-column-scroll {
+          scrollbar-width: thin;
+          scrollbar-color: #cbd5e1 transparent;
+        }
+        .workflow-column-scroll::-webkit-scrollbar {
+          width: 8px;
+        }
+        .workflow-column-scroll::-webkit-scrollbar-thumb {
+          background: #cbd5e1;
+          border-radius: 999px;
         }
       `}</style>
     </div>
