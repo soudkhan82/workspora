@@ -147,6 +147,9 @@ export default function WorkflowsPage() {
 
   const [showWorkflowModal, setShowWorkflowModal] = useState(false);
   const [workflowForm, setWorkflowForm] = useState(emptyWorkflow);
+  const [editingWorkflowId, setEditingWorkflowId] = useState<number | null>(
+    null,
+  );
   const [savingWorkflow, setSavingWorkflow] = useState(false);
 
   const [showCsvModal, setShowCsvModal] = useState(false);
@@ -313,7 +316,12 @@ export default function WorkflowsPage() {
       );
 
       if (wf?.length) {
-        setSelectedWorkflow((current) => current ?? wf[0].id);
+        setSelectedWorkflow((current) => {
+          const currentStillExists = wf.some(
+            (workflow: Workflow) => workflow.id === current,
+          );
+          return currentStillExists ? current : wf[0].id;
+        });
       } else {
         setSelectedWorkflow(null);
         setStages([]);
@@ -727,6 +735,24 @@ export default function WorkflowsPage() {
     if (selectedWorkflow) await loadBoard(selectedWorkflow);
   }
 
+  function openCreateWorkflow() {
+    setEditingWorkflowId(null);
+    setWorkflowForm(emptyWorkflow);
+    setShowWorkflowModal(true);
+  }
+
+  function openEditWorkflow(workflow: Workflow | null) {
+    if (!workflow) return;
+
+    setEditingWorkflowId(workflow.id);
+    setWorkflowForm({
+      name: workflow.name ?? "",
+      description: workflow.description ?? "",
+      status: workflow.status ?? "Active",
+    });
+    setShowWorkflowModal(true);
+  }
+
   async function saveWorkflow() {
     if (!workflowForm.name.trim()) return alert("Workflow name is required.");
 
@@ -740,17 +766,39 @@ export default function WorkflowsPage() {
         return;
       }
 
-      const payload = {
+      const basePayload = {
         name: workflowForm.name.trim(),
         description: workflowForm.description.trim() || null,
         status: workflowForm.status || "Active",
-        workspace_id: workspaceId,
-        created_by: user.id,
       };
+
+      if (editingWorkflowId) {
+        const { error } = await supabase
+          .from("workflows")
+          .update(basePayload)
+          .eq("id", editingWorkflowId)
+          .eq("workspace_id", workspaceId);
+
+        if (error) {
+          alert(error.message);
+          return;
+        }
+
+        setWorkflowForm(emptyWorkflow);
+        setEditingWorkflowId(null);
+        setShowWorkflowModal(false);
+        await loadInitial();
+        setSelectedWorkflow(editingWorkflowId);
+        return;
+      }
 
       const { data, error } = await supabase
         .from("workflows")
-        .insert(payload)
+        .insert({
+          ...basePayload,
+          workspace_id: workspaceId,
+          created_by: user.id,
+        })
         .select("*")
         .single();
 
@@ -760,12 +808,75 @@ export default function WorkflowsPage() {
       }
 
       setWorkflowForm(emptyWorkflow);
+      setEditingWorkflowId(null);
       setShowWorkflowModal(false);
       await loadInitial();
 
       if (data?.id) {
         setSelectedWorkflow(Number(data.id));
       }
+    } finally {
+      setSavingWorkflow(false);
+    }
+  }
+
+  async function deleteWorkflow(workflow: Workflow | null) {
+    if (!workflow) return;
+
+    const confirmed = confirm(
+      `Delete workflow "${workflow.name}"?\n\nThis will also delete all tasks and stages inside this workflow. This action cannot be undone.`,
+    );
+
+    if (!confirmed) return;
+
+    setSavingWorkflow(true);
+
+    try {
+      const { workspaceId } = await loadSessionContext();
+
+      if (!workspaceId) {
+        alert("User workspace session not found. Please login again.");
+        return;
+      }
+
+      const { error: taskDeleteError } = await supabase
+        .from("workflow_tasks")
+        .delete()
+        .eq("workflow_id", workflow.id)
+        .eq("workspace_id", workspaceId);
+
+      if (taskDeleteError) {
+        alert(taskDeleteError.message);
+        return;
+      }
+
+      const { error: stageDeleteError } = await supabase
+        .from("workflow_stages")
+        .delete()
+        .eq("workflow_id", workflow.id)
+        .eq("workspace_id", workspaceId);
+
+      if (stageDeleteError) {
+        alert(stageDeleteError.message);
+        return;
+      }
+
+      const { error: workflowDeleteError } = await supabase
+        .from("workflows")
+        .delete()
+        .eq("id", workflow.id)
+        .eq("workspace_id", workspaceId);
+
+      if (workflowDeleteError) {
+        alert(workflowDeleteError.message);
+        return;
+      }
+
+      setSelectedWorkflow(null);
+      setStages([]);
+      setTasks([]);
+      setSelectedTaskIds([]);
+      await loadInitial();
     } finally {
       setSavingWorkflow(false);
     }
@@ -1249,6 +1360,23 @@ export default function WorkflowsPage() {
                 ))}
               </select>
 
+              <button
+                onClick={() => openEditWorkflow(selectedWorkflowRow)}
+                disabled={!selectedWorkflowRow || savingWorkflow}
+                className="btn-soft disabled:cursor-not-allowed disabled:opacity-50"
+                title="Edit selected workflow"
+              >
+                Edit Workflow
+              </button>
+              <button
+                onClick={() => deleteWorkflow(selectedWorkflowRow)}
+                disabled={!selectedWorkflowRow || savingWorkflow}
+                className="btn-red disabled:cursor-not-allowed disabled:opacity-50"
+                title="Delete selected workflow"
+              >
+                Delete Workflow
+              </button>
+
               <SegmentedButton
                 active={viewMode === "board"}
                 onClick={() => setViewMode("board")}
@@ -1295,10 +1423,7 @@ export default function WorkflowsPage() {
               <button onClick={exportFilteredTasksCsv} className="btn-soft">
                 Export CSV
               </button>
-              <button
-                onClick={() => setShowWorkflowModal(true)}
-                className="btn-blue"
-              >
+              <button onClick={openCreateWorkflow} className="btn-blue">
                 + Workflow
               </button>
               <button onClick={() => openAddTask()} className="btn-green">
@@ -1515,8 +1640,12 @@ export default function WorkflowsPage() {
 
       {showWorkflowModal && (
         <Modal
-          title="Create Workflow"
-          onClose={() => setShowWorkflowModal(false)}
+          title={editingWorkflowId ? "Edit Workflow" : "Create Workflow"}
+          onClose={() => {
+            setShowWorkflowModal(false);
+            setEditingWorkflowId(null);
+            setWorkflowForm(emptyWorkflow);
+          }}
           maxWidth="max-w-2xl"
         >
           <div className="grid grid-cols-1 gap-4">
@@ -1558,7 +1687,11 @@ export default function WorkflowsPage() {
           </div>
           <div className="mt-6 flex justify-end gap-3">
             <button
-              onClick={() => setShowWorkflowModal(false)}
+              onClick={() => {
+                setShowWorkflowModal(false);
+                setEditingWorkflowId(null);
+                setWorkflowForm(emptyWorkflow);
+              }}
               className="btn-soft"
             >
               Cancel
@@ -1568,7 +1701,13 @@ export default function WorkflowsPage() {
               disabled={savingWorkflow}
               className="btn-blue"
             >
-              {savingWorkflow ? "Creating..." : "Create Workflow"}
+              {savingWorkflow
+                ? editingWorkflowId
+                  ? "Updating..."
+                  : "Creating..."
+                : editingWorkflowId
+                  ? "Update Workflow"
+                  : "Create Workflow"}
             </button>
           </div>
         </Modal>
@@ -2047,6 +2186,18 @@ export default function WorkflowsPage() {
         }
         .btn-green:hover {
           background: #047857;
+        }
+        .btn-red {
+          border-radius: 0.75rem;
+          background: #dc2626;
+          padding: 0.625rem 1.05rem;
+          font-size: 0.8rem;
+          font-weight: 900;
+          color: white;
+          box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+        }
+        .btn-red:hover {
+          background: #b91c1c;
         }
         .workflow-column-scroll {
           scrollbar-width: thin;
