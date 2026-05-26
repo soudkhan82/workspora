@@ -170,6 +170,8 @@ export default function ExpensesPage() {
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [uploadMode, setUploadMode] = useState<UploadMode>("append");
   const [selectedCsvFile, setSelectedCsvFile] = useState<File | null>(null);
+  const [selectedVisualCurrency, setSelectedVisualCurrency] = useState("PKR");
+  const [trendDialogOpen, setTrendDialogOpen] = useState(false);
 
   const selectedCurrency = form.currency || "USD";
 
@@ -295,12 +297,36 @@ export default function ExpensesPage() {
     return map;
   }, [categories]);
 
+  const availableVisualCurrencies = useMemo(() => {
+    const fromData = Array.from(
+      new Set(expenses.map((expense) => expense.currency || "USD")),
+    ).sort();
+
+    return fromData.length
+      ? fromData
+      : CURRENCIES.map((currency) => currency.code);
+  }, [expenses]);
+
+  useEffect(() => {
+    if (!availableVisualCurrencies.length) return;
+
+    if (!availableVisualCurrencies.includes(selectedVisualCurrency)) {
+      setSelectedVisualCurrency(availableVisualCurrencies[0]);
+    }
+  }, [availableVisualCurrencies, selectedVisualCurrency]);
+
+  const selectedCurrencyExpenses = useMemo(() => {
+    return expenses.filter(
+      (expense) => (expense.currency || "USD") === selectedVisualCurrency,
+    );
+  }, [expenses, selectedVisualCurrency]);
+
   const filteredExpenses = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
 
-    if (!q) return expenses;
+    if (!q) return selectedCurrencyExpenses;
 
-    return expenses.filter((expense) => {
+    return selectedCurrencyExpenses.filter((expense) => {
       const category = getExpenseCategoryName(expense);
       const vendor = expense.vendor || "";
       const description = expense.description || "";
@@ -313,7 +339,7 @@ export default function ExpensesPage() {
         .toLowerCase()
         .includes(q);
     });
-  }, [expenses, searchTerm]);
+  }, [selectedCurrencyExpenses, searchTerm]);
 
   const filteredExpenseIds = useMemo(() => {
     return filteredExpenses.map((expense) => String(expense.id));
@@ -352,14 +378,11 @@ export default function ExpensesPage() {
       }
     >();
 
-    expenses.forEach((expense) => {
+    selectedCurrencyExpenses.forEach((expense) => {
       const category = getExpenseCategoryName(expense);
-      const currency = expense.currency || "USD";
-      const key = `${category}__${currency}`;
-
-      const previous = map.get(key) || {
+      const previous = map.get(category) || {
         category,
-        currency,
+        currency: selectedVisualCurrency,
         amount: 0,
         count: 0,
       };
@@ -367,11 +390,11 @@ export default function ExpensesPage() {
       previous.amount += Number(expense.amount || 0);
       previous.count += 1;
 
-      map.set(key, previous);
+      map.set(category, previous);
     });
 
     return Array.from(map.values()).sort((a, b) => b.amount - a.amount);
-  }, [expenses]);
+  }, [selectedCurrencyExpenses, selectedVisualCurrency]);
 
   const currencySummary = useMemo(() => {
     const map = new Map<
@@ -400,30 +423,34 @@ export default function ExpensesPage() {
     return Array.from(map.values()).sort((a, b) => b.amount - a.amount);
   }, [expenses]);
 
-  const monthlyTrendByCurrency = useMemo(() => {
-    const currencyMap = new Map<
+  const selectedCurrencyTotal = useMemo(() => {
+    return selectedCurrencyExpenses.reduce(
+      (sum, expense) => sum + Number(expense.amount || 0),
+      0,
+    );
+  }, [selectedCurrencyExpenses]);
+
+  const selectedCurrencyCategoryCount = useMemo(() => {
+    return new Set(
+      selectedCurrencyExpenses.map((expense) =>
+        getExpenseCategoryName(expense),
+      ),
+    ).size;
+  }, [selectedCurrencyExpenses]);
+
+  const selectedTrend = useMemo(() => {
+    const monthMap = new Map<
       string,
-      Map<
-        string,
-        {
-          month: string;
-          amount: number;
-          count: number;
-        }
-      >
+      {
+        month: string;
+        amount: number;
+        count: number;
+      }
     >();
 
-    expenses.forEach((expense) => {
+    selectedCurrencyExpenses.forEach((expense) => {
       const month = String(expense.expense_date || "").slice(0, 7);
       if (!month) return;
-
-      const currency = expense.currency || "USD";
-
-      if (!currencyMap.has(currency)) {
-        currencyMap.set(currency, new Map());
-      }
-
-      const monthMap = currencyMap.get(currency)!;
 
       const previous = monthMap.get(month) || {
         month,
@@ -437,35 +464,24 @@ export default function ExpensesPage() {
       monthMap.set(month, previous);
     });
 
-    return Array.from(currencyMap.entries())
-      .map(([currency, monthMap]) => {
-        const data = Array.from(monthMap.values()).sort((a, b) =>
-          a.month.localeCompare(b.month),
-        );
+    const data = Array.from(monthMap.values()).sort((a, b) =>
+      a.month.localeCompare(b.month),
+    );
 
-        const totalAmount = data.reduce(
-          (sum, item) => sum + Number(item.amount || 0),
-          0,
-        );
-
-        const totalCount = data.reduce(
-          (sum, item) => sum + Number(item.count || 0),
-          0,
-        );
-
-        return {
-          currency,
-          data,
-          totalAmount,
-          totalCount,
-        };
-      })
-      .sort((a, b) => b.totalAmount - a.totalAmount);
-  }, [expenses]);
+    return {
+      currency: selectedVisualCurrency,
+      data,
+      totalAmount: data.reduce(
+        (sum, item) => sum + Number(item.amount || 0),
+        0,
+      ),
+      totalCount: data.reduce((sum, item) => sum + Number(item.count || 0), 0),
+    };
+  }, [selectedCurrencyExpenses, selectedVisualCurrency]);
 
   const topCategoriesForChart = useMemo(() => {
     return categorySummary.slice(0, 8).map((item) => ({
-      name: `${item.category} (${item.currency})`,
+      name: item.category,
       amount: Number(item.amount.toFixed(2)),
     }));
   }, [categorySummary]);
@@ -985,7 +1001,36 @@ export default function ExpensesPage() {
             </p>
           </div>
 
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">
+                Visual Currency
+              </label>
+              <select
+                value={selectedVisualCurrency}
+                onChange={(event) => {
+                  setSelectedVisualCurrency(event.target.value);
+                  setSearchTerm("");
+                  setSelectedExpenseIds(new Set());
+                }}
+                className="min-w-[150px] rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm font-bold text-slate-950 shadow-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+              >
+                {availableVisualCurrencies.map((currency) => (
+                  <option key={currency} value={currency}>
+                    {currency}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setTrendDialogOpen(true)}
+              className="rounded-xl bg-slate-950 px-5 py-3 text-sm font-bold text-white shadow-sm hover:bg-slate-800"
+            >
+              View Trend Chart
+            </button>
+
             <button
               type="button"
               onClick={downloadTemplate}
@@ -1018,302 +1063,302 @@ export default function ExpensesPage() {
         <section className="grid gap-4 md:grid-cols-4">
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
             <p className="text-sm font-semibold text-slate-600">
-              Total Records
+              {selectedVisualCurrency} Records
             </p>
             <p className="mt-5 text-4xl font-bold text-slate-950">
-              {expenses.length.toLocaleString()}
+              {selectedCurrencyExpenses.length.toLocaleString()}
             </p>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <p className="text-sm font-semibold text-slate-600">Categories</p>
+            <p className="text-sm font-semibold text-slate-600">
+              {selectedVisualCurrency} Categories
+            </p>
             <p className="mt-5 text-4xl font-bold text-slate-950">
-              {categories.length.toLocaleString()}
+              {selectedCurrencyCategoryCount.toLocaleString()}
             </p>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm md:col-span-2">
             <p className="text-sm font-semibold text-slate-600">
-              Total by Currency
+              Selected Currency Total
             </p>
 
-            <div className="mt-5 flex flex-wrap gap-2">
-              {currencySummary.length ? (
-                currencySummary.map((item) => (
-                  <span
-                    key={item.currency}
-                    className="rounded-full bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-800"
-                  >
-                    {item.currency} {Number(item.amount || 0).toLocaleString()}
+            <div className="mt-5 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+              <p className="text-4xl font-bold text-slate-950">
+                {formatAmount(selectedCurrencyTotal, selectedVisualCurrency)}
+              </p>
+
+              <div className="flex flex-wrap gap-2">
+                {currencySummary.length ? (
+                  currencySummary.map((item) => (
+                    <span
+                      key={item.currency}
+                      className={`rounded-full px-3 py-1 text-xs font-bold ${
+                        item.currency === selectedVisualCurrency
+                          ? "bg-emerald-100 text-emerald-800"
+                          : "bg-slate-100 text-slate-600"
+                      }`}
+                    >
+                      {item.currency}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-sm text-slate-500">
+                    No expenses yet
                   </span>
-                ))
-              ) : (
-                <span className="text-sm text-slate-500">No expenses yet</span>
-              )}
+                )}
+              </div>
             </div>
           </div>
         </section>
 
-        <section className="grid gap-6 lg:grid-cols-12">
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-4">
-            <h2 className="text-xl font-bold text-slate-950">Add Expense</h2>
+        <section className="grid gap-4 lg:grid-cols-12 lg:items-start">
+          <div className="space-y-4 lg:col-span-4">
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h2 className="text-xl font-bold text-slate-950">Add Expense</h2>
 
-            <div className="mt-5 space-y-4">
-              <div>
-                <label className="text-sm font-semibold text-slate-700">
-                  Expense Category
-                </label>
-                <select
-                  value={form.expense_category_id}
-                  onChange={(event) =>
-                    setForm((previous) => ({
-                      ...previous,
-                      expense_category_id: event.target.value,
-                    }))
-                  }
-                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                >
-                  <option value="">Select category</option>
-                  {categories.map((category) => (
-                    <option key={category.id} value={category.id}>
-                      {category.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
+              <div className="mt-5 space-y-4">
                 <div>
                   <label className="text-sm font-semibold text-slate-700">
-                    Currency
+                    Expense Category
                   </label>
                   <select
-                    value={form.currency}
+                    value={form.expense_category_id}
                     onChange={(event) =>
                       setForm((previous) => ({
                         ...previous,
-                        currency: event.target.value,
+                        expense_category_id: event.target.value,
                       }))
                     }
                     className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                   >
-                    {CURRENCIES.map((currency) => (
-                      <option key={currency.code} value={currency.code}>
-                        {currency.label}
+                    <option value="">Select category</option>
+                    {categories.map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.name}
                       </option>
                     ))}
                   </select>
                 </div>
 
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700">
+                      Currency
+                    </label>
+                    <select
+                      value={form.currency}
+                      onChange={(event) =>
+                        setForm((previous) => ({
+                          ...previous,
+                          currency: event.target.value,
+                        }))
+                      }
+                      className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                    >
+                      {CURRENCIES.map((currency) => (
+                        <option key={currency.code} value={currency.code}>
+                          {currency.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700">
+                      Amount
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form.amount}
+                      onChange={(event) =>
+                        setForm((previous) => ({
+                          ...previous,
+                          amount: event.target.value,
+                        }))
+                      }
+                      placeholder={`Amount in ${selectedCurrency}`}
+                      className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                    />
+                  </div>
+                </div>
+
                 <div>
                   <label className="text-sm font-semibold text-slate-700">
-                    Amount
+                    Expense Date
                   </label>
                   <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.amount}
+                    type="date"
+                    value={form.expense_date}
                     onChange={(event) =>
                       setForm((previous) => ({
                         ...previous,
-                        amount: event.target.value,
+                        expense_date: event.target.value,
                       }))
                     }
-                    placeholder={`Amount in ${selectedCurrency}`}
                     className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
                   />
                 </div>
-              </div>
 
-              <div>
-                <label className="text-sm font-semibold text-slate-700">
-                  Expense Date
-                </label>
-                <input
-                  type="date"
-                  value={form.expense_date}
-                  onChange={(event) =>
-                    setForm((previous) => ({
-                      ...previous,
-                      expense_date: event.target.value,
-                    }))
-                  }
-                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                />
-              </div>
+                <div>
+                  <label className="text-sm font-semibold text-slate-700">
+                    Vendor / Paid To
+                  </label>
+                  <input
+                    value={form.vendor}
+                    onChange={(event) =>
+                      setForm((previous) => ({
+                        ...previous,
+                        vendor: event.target.value,
+                      }))
+                    }
+                    placeholder="Vendor name"
+                    className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  />
+                </div>
 
-              <div>
-                <label className="text-sm font-semibold text-slate-700">
-                  Vendor / Paid To
-                </label>
-                <input
-                  value={form.vendor}
-                  onChange={(event) =>
-                    setForm((previous) => ({
-                      ...previous,
-                      vendor: event.target.value,
-                    }))
-                  }
-                  placeholder="Vendor name"
-                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                />
-              </div>
-
-              <div>
-                <label className="text-sm font-semibold text-slate-700">
-                  Description
-                </label>
-                <textarea
-                  value={form.description}
-                  onChange={(event) =>
-                    setForm((previous) => ({
-                      ...previous,
-                      description: event.target.value,
-                    }))
-                  }
-                  placeholder="Short expense description"
-                  rows={3}
-                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                />
-              </div>
-
-              <button
-                type="button"
-                onClick={handleSaveExpense}
-                disabled={saving}
-                className="w-full rounded-xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {saving ? "Saving..." : "Save Expense"}
-              </button>
-            </div>
-
-            <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <h3 className="text-sm font-bold text-slate-950">
-                Add Expense Category
-              </h3>
-
-              <div className="mt-3 flex gap-2">
-                <input
-                  value={newCategoryName}
-                  onChange={(event) => setNewCategoryName(event.target.value)}
-                  placeholder="e.g. Travel, Software, Fuel"
-                  className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                />
+                <div>
+                  <label className="text-sm font-semibold text-slate-700">
+                    Description
+                  </label>
+                  <textarea
+                    value={form.description}
+                    onChange={(event) =>
+                      setForm((previous) => ({
+                        ...previous,
+                        description: event.target.value,
+                      }))
+                    }
+                    placeholder="Short expense description"
+                    rows={3}
+                    className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  />
+                </div>
 
                 <button
                   type="button"
-                  onClick={handleAddCategory}
+                  onClick={handleSaveExpense}
                   disabled={saving}
-                  className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-bold text-slate-950 hover:bg-slate-100"
+                  className="w-full rounded-xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Add
+                  {saving ? "Saving..." : "Save Expense"}
                 </button>
+              </div>
+
+              <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <h3 className="text-sm font-bold text-slate-950">
+                  Add Expense Category
+                </h3>
+
+                <div className="mt-3 flex gap-2">
+                  <input
+                    value={newCategoryName}
+                    onChange={(event) => setNewCategoryName(event.target.value)}
+                    placeholder="e.g. Travel, Software, Fuel"
+                    className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  />
+
+                  <button
+                    type="button"
+                    onClick={handleAddCategory}
+                    disabled={saving}
+                    className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-bold text-slate-950 hover:bg-slate-100"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h2 className="text-lg font-bold text-slate-950">
+                Summary by Category ({selectedVisualCurrency})
+              </h2>
+
+              <div className="mt-3 max-h-[460px] overflow-y-auto rounded-2xl border border-slate-200">
+                <table className="w-full table-fixed text-left text-sm">
+                  <thead className="sticky top-0 bg-slate-950 text-[11px] uppercase tracking-wide text-white">
+                    <tr>
+                      <th className="w-[34%] px-3 py-3">Category</th>
+                      <th className="w-[18%] px-3 py-3 text-center">Records</th>
+                      <th className="w-[18%] px-3 py-3">Curr.</th>
+                      <th className="w-[30%] px-3 py-3 text-right">Amount</th>
+                    </tr>
+                  </thead>
+
+                  <tbody className="divide-y divide-slate-200 bg-white">
+                    {categorySummary.length ? (
+                      categorySummary.map((item) => (
+                        <tr key={`${item.category}-${item.currency}`}>
+                          <td
+                            className="truncate px-3 py-3 font-medium text-slate-950"
+                            title={item.category}
+                          >
+                            {item.category}
+                          </td>
+
+                          <td className="px-3 py-3 text-center font-semibold text-slate-700">
+                            {item.count}
+                          </td>
+
+                          <td className="px-3 py-3 text-slate-600">
+                            {item.currency}
+                          </td>
+
+                          <td className="whitespace-nowrap px-3 py-3 text-right font-bold text-slate-950">
+                            {formatAmount(item.amount, item.currency)}
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td
+                          colSpan={4}
+                          className="px-4 py-8 text-center text-slate-500"
+                        >
+                          No category summary available.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
 
-          <div className="space-y-6 lg:col-span-8">
+          <div className="space-y-4 lg:col-span-8">
             <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-xl font-bold text-slate-950">
-                      Time Series Trend
-                    </h2>
-                    <p className="mt-1 text-xs text-slate-500">
-                      Monthly trend separated by currency
-                    </p>
-                  </div>
-
-                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">
-                    {monthlyTrendByCurrency.length} currencies
-                  </span>
+              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-950">
+                    {selectedVisualCurrency} Visuals
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Category chart, summary table, and recent expenses are
+                    filtered to the selected currency.
+                  </p>
                 </div>
 
-                {monthlyTrendByCurrency.length ? (
-                  <div className="mt-5 grid gap-4 xl:grid-cols-2">
-                    {monthlyTrendByCurrency.map((item) => (
-                      <div
-                        key={item.currency}
-                        className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
-                      >
-                        <div className="mb-3 flex items-start justify-between gap-3">
-                          <div>
-                            <h3 className="text-sm font-bold text-slate-950">
-                              {item.currency} Trend
-                            </h3>
-                            <p className="mt-1 text-xs text-slate-500">
-                              {item.totalCount.toLocaleString()} records
-                            </p>
-                          </div>
-
-                          <div className="rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-700 shadow-sm">
-                            {item.currency}{" "}
-                            {Number(item.totalAmount || 0).toLocaleString()}
-                          </div>
-                        </div>
-
-                        <div className="h-56">
-                          <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={item.data}>
-                              <CartesianGrid
-                                strokeDasharray="3 3"
-                                stroke="#e2e8f0"
-                              />
-                              <XAxis
-                                dataKey="month"
-                                stroke="#64748b"
-                                tick={{ fill: "#64748b", fontSize: 11 }}
-                              />
-                              <YAxis
-                                stroke="#64748b"
-                                tick={{ fill: "#64748b", fontSize: 11 }}
-                                tickFormatter={(value) =>
-                                  Number(value || 0).toLocaleString()
-                                }
-                              />
-                              <Tooltip
-                                contentStyle={{
-                                  background: "#ffffff",
-                                  border: "1px solid #cbd5e1",
-                                  borderRadius: "12px",
-                                  color: "#020617",
-                                }}
-                                formatter={(value: any) => [
-                                  `${item.currency} ${Number(value || 0).toLocaleString()}`,
-                                  "Amount",
-                                ]}
-                                labelFormatter={(label) => `Month: ${label}`}
-                              />
-                              <Area
-                                type="monotone"
-                                dataKey="amount"
-                                stroke="#059669"
-                                fill="#d1fae5"
-                                strokeWidth={3}
-                              />
-                            </AreaChart>
-                          </ResponsiveContainer>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">
-                    No expense trend available yet.
-                  </div>
-                )}
+                <button
+                  type="button"
+                  onClick={() => setTrendDialogOpen(true)}
+                  className="rounded-xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white hover:bg-emerald-700"
+                >
+                  Open Line Trend
+                </button>
               </div>
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-bold text-slate-950">
-                  Category Summary
+                  {selectedVisualCurrency} Category Summary
                 </h2>
                 <span className="text-xs font-medium text-slate-500">
-                  Top categories by amount
+                  Top categories by amount in selected currency
                 </span>
               </div>
 
@@ -1342,7 +1387,10 @@ export default function ExpensesPage() {
                         color: "#020617",
                       }}
                       formatter={(value: any) => [
-                        Number(value || 0).toLocaleString(),
+                        formatAmount(
+                          Number(value || 0),
+                          selectedVisualCurrency,
+                        ),
                         "Amount",
                       ]}
                     />
@@ -1355,225 +1403,285 @@ export default function ExpensesPage() {
                 </ResponsiveContainer>
               </div>
             </div>
-          </div>
-        </section>
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-950">
+                    Recent Expenses
+                  </h2>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Showing {filteredExpenses.length} of{" "}
+                    {selectedCurrencyExpenses.length} {selectedVisualCurrency}{" "}
+                    records
+                    {selectedCount > 0 ? ` • ${selectedCount} selected` : ""}
+                  </p>
+                </div>
 
-        <section className="grid gap-4 lg:grid-cols-12">
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:col-span-4">
-            <h2 className="text-lg font-bold text-slate-950">
-              Summary by Category
-            </h2>
+                <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row md:items-center">
+                  {selectedCount > 0 ? (
+                    <button
+                      type="button"
+                      onClick={handleBulkDeleteExpenses}
+                      disabled={saving}
+                      className="rounded-xl bg-red-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {saving
+                        ? "Deleting..."
+                        : `Delete Selected (${selectedCount})`}
+                    </button>
+                  ) : null}
 
-            <div className="mt-3 max-h-[460px] overflow-y-auto rounded-2xl border border-slate-200">
-              <table className="w-full table-fixed text-left text-sm">
-                <thead className="sticky top-0 bg-slate-950 text-[11px] uppercase tracking-wide text-white">
-                  <tr>
-                    <th className="w-[34%] px-3 py-3">Category</th>
-                    <th className="w-[18%] px-3 py-3 text-center">Records</th>
-                    <th className="w-[18%] px-3 py-3">Curr.</th>
-                    <th className="w-[30%] px-3 py-3 text-right">Amount</th>
-                  </tr>
-                </thead>
+                  <div className="flex w-full gap-2 md:w-[460px]">
+                    <input
+                      value={searchTerm}
+                      onChange={(event) => setSearchTerm(event.target.value)}
+                      placeholder="Search category, vendor, date, amount..."
+                      className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-950 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                    />
 
-                <tbody className="divide-y divide-slate-200 bg-white">
-                  {categorySummary.length ? (
-                    categorySummary.map((item) => (
-                      <tr key={`${item.category}-${item.currency}`}>
-                        <td
-                          className="truncate px-3 py-3 font-medium text-slate-950"
-                          title={item.category}
-                        >
-                          {item.category}
-                        </td>
-
-                        <td className="px-3 py-3 text-center font-semibold text-slate-700">
-                          {item.count}
-                        </td>
-
-                        <td className="px-3 py-3 text-slate-600">
-                          {item.currency}
-                        </td>
-
-                        <td className="whitespace-nowrap px-3 py-3 text-right font-bold text-slate-950">
-                          {formatAmount(item.amount, item.currency)}
-                        </td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td
-                        colSpan={4}
-                        className="px-4 py-8 text-center text-slate-500"
-                      >
-                        No category summary available.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:col-span-8">
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <h2 className="text-lg font-bold text-slate-950">
-                  Recent Expenses
-                </h2>
-                <p className="mt-1 text-xs text-slate-500">
-                  Showing {filteredExpenses.length} of {expenses.length} records
-                  {selectedCount > 0 ? ` • ${selectedCount} selected` : ""}
-                </p>
-              </div>
-
-              <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row md:items-center">
-                {selectedCount > 0 ? (
-                  <button
-                    type="button"
-                    onClick={handleBulkDeleteExpenses}
-                    disabled={saving}
-                    className="rounded-xl bg-red-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {saving
-                      ? "Deleting..."
-                      : `Delete Selected (${selectedCount})`}
-                  </button>
-                ) : null}
-
-                <div className="flex w-full gap-2 md:w-[460px]">
-                  <input
-                    value={searchTerm}
-                    onChange={(event) => setSearchTerm(event.target.value)}
-                    placeholder="Search category, vendor, date, amount..."
-                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-950 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-                  />
-
-                  <button
-                    type="button"
-                    onClick={() => setSearchTerm("")}
-                    className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-bold text-slate-950 hover:bg-slate-50"
-                  >
-                    Reset
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => setSearchTerm("")}
+                      className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-bold text-slate-950 hover:bg-slate-50"
+                    >
+                      Reset
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <div className="mt-3 max-h-[460px] overflow-y-auto rounded-2xl border border-slate-200">
-              <table className="w-full table-fixed text-left text-sm">
-                <thead className="sticky top-0 bg-slate-950 text-[11px] uppercase tracking-wide text-white">
-                  <tr>
-                    <th className="w-[6%] px-3 py-3 text-center">
-                      <input
-                        type="checkbox"
-                        checked={allFilteredSelected}
-                        onChange={toggleAllFilteredExpenses}
-                        className="h-4 w-4 cursor-pointer rounded border-slate-300 accent-emerald-600"
-                        aria-label="Select all visible expenses"
-                      />
-                    </th>
-                    <th className="w-[13%] px-3 py-3">Date</th>
-                    <th className="w-[21%] px-3 py-3">Category</th>
-                    <th className="w-[18%] px-3 py-3">Vendor</th>
-                    <th className="w-[17%] px-3 py-3 text-right">Amount</th>
-                    <th className="w-[25%] px-3 py-3 text-right">Actions</th>
-                  </tr>
-                </thead>
-
-                <tbody className="divide-y divide-slate-200 bg-white">
-                  {filteredExpenses.length ? (
-                    filteredExpenses.map((expense) => {
-                      const expenseId = String(expense.id);
-                      const isSelected = selectedExpenseIds.has(expenseId);
-
-                      return (
-                        <tr
-                          key={expense.id}
-                          className={isSelected ? "bg-emerald-50" : "bg-white"}
-                        >
-                          <td className="px-3 py-3 text-center">
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() =>
-                                toggleExpenseSelection(expense.id)
-                              }
-                              className="h-4 w-4 cursor-pointer rounded border-slate-300 accent-emerald-600"
-                              aria-label={`Select expense ${expense.id}`}
-                            />
-                          </td>
-
-                          <td className="whitespace-nowrap px-3 py-3 text-slate-700">
-                            {expense.expense_date}
-                          </td>
-
-                          <td
-                            className="truncate px-3 py-3 font-medium text-slate-950"
-                            title={getExpenseCategoryName(expense)}
-                          >
-                            {getExpenseCategoryName(expense)}
-                          </td>
-
-                          <td
-                            className="truncate px-3 py-3 text-slate-600"
-                            title={expense.vendor || "-"}
-                          >
-                            {expense.vendor || "-"}
-                          </td>
-
-                          <td className="whitespace-nowrap px-3 py-3 text-right font-bold text-slate-950">
-                            {formatAmount(
-                              Number(expense.amount || 0),
-                              expense.currency || "USD",
-                            )}
-                          </td>
-
-                          <td className="whitespace-nowrap px-3 py-3 text-right">
-                            <div className="flex justify-end gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => setViewExpense(expense)}
-                                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-950 hover:bg-slate-50"
-                              >
-                                View
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => openEditExpense(expense)}
-                                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-950 hover:bg-slate-50"
-                              >
-                                Edit
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteExpense(expense.id)}
-                                className="rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-700"
-                              >
-                                Delete
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  ) : (
+              <div className="mt-3 max-h-[460px] overflow-y-auto rounded-2xl border border-slate-200">
+                <table className="w-full table-fixed text-left text-sm">
+                  <thead className="sticky top-0 bg-slate-950 text-[11px] uppercase tracking-wide text-white">
                     <tr>
-                      <td
-                        colSpan={6}
-                        className="px-4 py-8 text-center text-slate-500"
-                      >
-                        No expenses found.
-                      </td>
+                      <th className="w-[6%] px-3 py-3 text-center">
+                        <input
+                          type="checkbox"
+                          checked={allFilteredSelected}
+                          onChange={toggleAllFilteredExpenses}
+                          className="h-4 w-4 cursor-pointer rounded border-slate-300 accent-emerald-600"
+                          aria-label="Select all visible expenses"
+                        />
+                      </th>
+                      <th className="w-[13%] px-3 py-3">Date</th>
+                      <th className="w-[21%] px-3 py-3">Category</th>
+                      <th className="w-[18%] px-3 py-3">Vendor</th>
+                      <th className="w-[17%] px-3 py-3 text-right">Amount</th>
+                      <th className="w-[25%] px-3 py-3 text-right">Actions</th>
                     </tr>
-                  )}
-                </tbody>
-              </table>
+                  </thead>
+
+                  <tbody className="divide-y divide-slate-200 bg-white">
+                    {filteredExpenses.length ? (
+                      filteredExpenses.map((expense) => {
+                        const expenseId = String(expense.id);
+                        const isSelected = selectedExpenseIds.has(expenseId);
+
+                        return (
+                          <tr
+                            key={expense.id}
+                            className={
+                              isSelected ? "bg-emerald-50" : "bg-white"
+                            }
+                          >
+                            <td className="px-3 py-3 text-center">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() =>
+                                  toggleExpenseSelection(expense.id)
+                                }
+                                className="h-4 w-4 cursor-pointer rounded border-slate-300 accent-emerald-600"
+                                aria-label={`Select expense ${expense.id}`}
+                              />
+                            </td>
+
+                            <td className="whitespace-nowrap px-3 py-3 text-slate-700">
+                              {expense.expense_date}
+                            </td>
+
+                            <td
+                              className="truncate px-3 py-3 font-medium text-slate-950"
+                              title={getExpenseCategoryName(expense)}
+                            >
+                              {getExpenseCategoryName(expense)}
+                            </td>
+
+                            <td
+                              className="truncate px-3 py-3 text-slate-600"
+                              title={expense.vendor || "-"}
+                            >
+                              {expense.vendor || "-"}
+                            </td>
+
+                            <td className="whitespace-nowrap px-3 py-3 text-right font-bold text-slate-950">
+                              {formatAmount(
+                                Number(expense.amount || 0),
+                                expense.currency || "USD",
+                              )}
+                            </td>
+
+                            <td className="whitespace-nowrap px-3 py-3 text-right">
+                              <div className="flex justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setViewExpense(expense)}
+                                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-950 hover:bg-slate-50"
+                                >
+                                  View
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => openEditExpense(expense)}
+                                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-950 hover:bg-slate-50"
+                                >
+                                  Edit
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleDeleteExpense(expense.id)
+                                  }
+                                  className="rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-700"
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    ) : (
+                      <tr>
+                        <td
+                          colSpan={6}
+                          className="px-4 py-8 text-center text-slate-500"
+                        >
+                          No expenses found.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </section>
       </div>
+
+      {trendDialogOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4">
+          <div className="w-full max-w-6xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+              <div>
+                <h2 className="text-2xl font-bold text-slate-950">
+                  {selectedVisualCurrency} Expense Trend
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Monthly line chart for the selected currency only.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <select
+                  value={selectedVisualCurrency}
+                  onChange={(event) =>
+                    setSelectedVisualCurrency(event.target.value)
+                  }
+                  className="min-w-[150px] rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm font-bold text-slate-950 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                >
+                  {availableVisualCurrencies.map((currency) => (
+                    <option key={currency} value={currency}>
+                      {currency}
+                    </option>
+                  ))}
+                </select>
+
+                <button
+                  type="button"
+                  onClick={() => setTrendDialogOpen(false)}
+                  className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-bold text-slate-950 hover:bg-slate-50"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+
+            {selectedTrend.data.length ? (
+              <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-950">
+                      Monthly Expense Trend
+                    </h3>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {selectedTrend.totalCount.toLocaleString()} records
+                      plotted monthly
+                    </p>
+                  </div>
+
+                  <div className="rounded-full bg-white px-4 py-2 text-xs font-bold text-slate-700 shadow-sm">
+                    Total:{" "}
+                    {formatAmount(
+                      selectedTrend.totalAmount,
+                      selectedVisualCurrency,
+                    )}
+                  </div>
+                </div>
+
+                <div className="h-[520px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={selectedTrend.data}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis
+                        dataKey="month"
+                        stroke="#64748b"
+                        tick={{ fill: "#64748b", fontSize: 12 }}
+                      />
+                      <YAxis
+                        stroke="#64748b"
+                        tick={{ fill: "#64748b", fontSize: 12 }}
+                        tickFormatter={(value) =>
+                          Number(value || 0).toLocaleString()
+                        }
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          background: "#ffffff",
+                          border: "1px solid #cbd5e1",
+                          borderRadius: "12px",
+                          color: "#020617",
+                        }}
+                        formatter={(value: any) => [
+                          formatAmount(
+                            Number(value || 0),
+                            selectedVisualCurrency,
+                          ),
+                          "Amount",
+                        ]}
+                        labelFormatter={(label) => `Month: ${label}`}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="amount"
+                        stroke="#059669"
+                        fill="#d1fae5"
+                        strokeWidth={3}
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-16 text-center text-sm text-slate-500">
+                No trend data available for {selectedVisualCurrency}.
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {uploadDialogOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4">
