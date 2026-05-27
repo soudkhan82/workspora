@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createClientBrowser } from "@/app/lib/supabase/browser";
 
 type WorkspaceContext = {
@@ -73,6 +73,7 @@ export default function ContractsPage() {
   const [ctx, setCtx] = useState<WorkspaceContext | null>(null);
   const [contextError, setContextError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [clients, setClients] = useState<DropdownItem[]>([]);
@@ -82,9 +83,13 @@ export default function ContractsPage() {
   const [statuses, setStatuses] = useState<DropdownItem[]>([]);
 
   const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
+
   const [form, setForm] = useState<ContractForm>({ ...emptyForm });
   const [editingId, setEditingId] = useState<number | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [viewContract, setViewContract] = useState<Contract | null>(null);
 
   const [manageType, setManageType] = useState<ManageType | null>(null);
   const [manageName, setManageName] = useState("");
@@ -186,23 +191,19 @@ export default function ContractsPage() {
     const scopedCtx = currentCtx ?? (await getWorkspaceContext());
     if (!scopedCtx) return [];
 
-    // Master-data rule:
-    // clients/vendors/projects are global Workspora master tables.
-    // contract_types/contract_statuses remain contract-specific lookup tables.
-    // Prefer workspace scope so every value created for the workspace is visible
-    // in the dropdown. RLS still protects data from other workspaces/users.
     let { data, error } = await supabase
       .from(table)
       .select("id,name")
       .eq("workspace_id", scopedCtx.workspaceId)
       .order("name", { ascending: true });
 
-    // Fallback for any older lookup table that does not yet have workspace_id.
+    // Fallback for older lookup tables that do not yet have workspace_id.
     if (error) {
       const retry = await supabase
         .from(table)
         .select("id,name")
         .order("name", { ascending: true });
+
       data = retry.data;
       error = retry.error;
     }
@@ -249,6 +250,7 @@ export default function ContractsPage() {
     if (contract.client_id && clientById.get(contract.client_id)) {
       return clientById.get(contract.client_id)!;
     }
+
     return contract.client_name || "Not required";
   }
 
@@ -278,9 +280,18 @@ export default function ContractsPage() {
 
   const filteredContracts = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return contracts;
 
     return contracts.filter((contract) => {
+      const matchesStatus =
+        !statusFilter || String(contract.status_id ?? "") === statusFilter;
+
+      const matchesType =
+        !typeFilter || String(contract.contract_type_id ?? "") === typeFilter;
+
+      if (!matchesStatus || !matchesType) return false;
+
+      if (!q) return true;
+
       const haystack = [
         contract.contract_no,
         getClientName(contract),
@@ -303,6 +314,8 @@ export default function ContractsPage() {
   }, [
     contracts,
     search,
+    statusFilter,
+    typeFilter,
     clientById,
     vendorById,
     projectById,
@@ -328,8 +341,10 @@ export default function ContractsPage() {
 
     const activeValueByCurrency = contracts.reduce<Record<string, number>>(
       (acc, contract) => {
-        if (!getStatusName(contract).toLowerCase().includes("active"))
+        if (!getStatusName(contract).toLowerCase().includes("active")) {
           return acc;
+        }
+
         const currency = contract.currency || "PKR";
         acc[currency] =
           (acc[currency] || 0) + Number(contract.contract_value || 0);
@@ -345,6 +360,12 @@ export default function ContractsPage() {
       activeValue: formatCurrencySummary(activeValueByCurrency),
     };
   }, [contracts, statusById]);
+
+  function resetFilters() {
+    setSearch("");
+    setStatusFilter("");
+    setTypeFilter("");
+  }
 
   function openAddContract() {
     setForm({ ...emptyForm });
@@ -383,13 +404,18 @@ export default function ContractsPage() {
       return;
     }
 
+    if (form.contract_value && Number(form.contract_value) < 0) {
+      alert("Contract value cannot be negative.");
+      return;
+    }
+
+    setSaving(true);
+
     const selectedClient = form.client_id
       ? clients.find((client) => String(client.id) === form.client_id)
       : null;
 
-    // IMPORTANT FIX:
-    // contracts.client_name is NOT NULL in your DB, so always send a safe value.
-    // When no client is selected, the contract is saved as "Not required".
+    // contracts.client_name can be NOT NULL in existing DBs, so always send a safe value.
     const safeClientName = selectedClient?.name?.trim() || "Not required";
 
     const payload = {
@@ -423,6 +449,8 @@ export default function ContractsPage() {
           created_by: scopedCtx.userId,
         });
 
+    setSaving(false);
+
     if (error) {
       alert(error.message);
       return;
@@ -437,7 +465,8 @@ export default function ContractsPage() {
   async function deleteContract(id: number) {
     const scopedCtx = await getWorkspaceContext();
     if (!scopedCtx) return;
-    if (!confirm("Delete this contract?")) return;
+
+    if (!confirm("Delete this contract permanently?")) return;
 
     const { error } = await supabase
       .from("contracts")
@@ -451,6 +480,7 @@ export default function ContractsPage() {
       return;
     }
 
+    setViewContract(null);
     await loadContracts(scopedCtx);
   }
 
@@ -537,25 +567,38 @@ export default function ContractsPage() {
   }
 
   async function deleteManageItem(id: number) {
-    if (!manageType) return;
+    const scopedCtx = await getWorkspaceContext();
+    if (!scopedCtx || !manageType) return;
+
     const table = getManageTable();
     if (!table) return;
+
     if (
       !confirm(
         "Delete this item? Existing contracts may keep an empty reference.",
       )
-    )
-      return;
-
-    const { error } = await supabase.from(table).delete().eq("id", id);
-
-    if (error) {
-      alert(error.message);
+    ) {
       return;
     }
 
-    await refreshManageItems();
-    await loadContracts();
+    let result = await supabase
+      .from(table)
+      .delete()
+      .eq("id", id)
+      .eq("workspace_id", scopedCtx.workspaceId);
+
+    // Legacy fallback for lookup tables that do not have workspace_id.
+    if (result.error) {
+      result = await supabase.from(table).delete().eq("id", id);
+    }
+
+    if (result.error) {
+      alert(result.error.message);
+      return;
+    }
+
+    await refreshManageItems(scopedCtx);
+    await loadContracts(scopedCtx);
   }
 
   function openManageModal(type: ManageType) {
@@ -587,7 +630,7 @@ export default function ContractsPage() {
 
   if (contextError) {
     return (
-      <div className="px-[120px] py-12">
+      <div className="px-6 py-12 lg:px-[120px]">
         <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-red-700">
           <h1 className="text-lg font-bold">Contracts unavailable</h1>
           <p className="mt-2 text-sm">{contextError}</p>
@@ -597,58 +640,58 @@ export default function ContractsPage() {
   }
 
   return (
-    <div className="px-[120px] py-12">
-      <div className="mb-8 flex items-start justify-between gap-4">
+    <div className="px-6 py-10 lg:px-[120px]">
+      <div className="mb-8 flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-950">
             Contracts
           </h1>
           <p className="mt-1 max-w-xl text-sm text-slate-600">
-            Manage contracts using global clients, vendors and projects from master data.
+            Manage contracts with full create, view, edit and delete workflow.
           </p>
         </div>
 
-        <div className="flex flex-wrap justify-end gap-3">
+        <div className="flex flex-wrap gap-3 xl:justify-end">
           <button
             onClick={() => openManageModal("client")}
-            className="rounded-xl border border-slate-300 bg-white px-6 py-3 text-sm font-bold shadow-sm hover:bg-slate-50"
+            className="rounded-xl border border-slate-300 bg-white px-5 py-3 text-sm font-bold shadow-sm hover:bg-slate-50"
           >
             Manage Clients
           </button>
           <button
             onClick={() => openManageModal("vendor")}
-            className="rounded-xl border border-slate-300 bg-white px-6 py-3 text-sm font-bold shadow-sm hover:bg-slate-50"
+            className="rounded-xl border border-slate-300 bg-white px-5 py-3 text-sm font-bold shadow-sm hover:bg-slate-50"
           >
             Manage Vendors
           </button>
           <button
             onClick={() => openManageModal("project")}
-            className="rounded-xl border border-slate-300 bg-white px-6 py-3 text-sm font-bold shadow-sm hover:bg-slate-50"
+            className="rounded-xl border border-slate-300 bg-white px-5 py-3 text-sm font-bold shadow-sm hover:bg-slate-50"
           >
             Manage Projects
           </button>
           <button
             onClick={() => openManageModal("type")}
-            className="rounded-xl border border-slate-300 bg-white px-6 py-3 text-sm font-bold shadow-sm hover:bg-slate-50"
+            className="rounded-xl border border-slate-300 bg-white px-5 py-3 text-sm font-bold shadow-sm hover:bg-slate-50"
           >
             Manage Types
           </button>
           <button
             onClick={() => openManageModal("status")}
-            className="rounded-xl border border-slate-300 bg-white px-6 py-3 text-sm font-bold shadow-sm hover:bg-slate-50"
+            className="rounded-xl border border-slate-300 bg-white px-5 py-3 text-sm font-bold shadow-sm hover:bg-slate-50"
           >
             Manage Statuses
           </button>
           <button
             onClick={openAddContract}
-            className="rounded-xl bg-emerald-600 px-6 py-3 text-sm font-bold text-white shadow-sm hover:bg-emerald-700"
+            className="rounded-xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white shadow-sm hover:bg-emerald-700"
           >
             + Add Contract
           </button>
         </div>
       </div>
 
-      <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-4">
+      <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <SummaryCard title="Total Contracts" value={summary.total} />
         <SummaryCard title="Active Contracts" value={summary.active} />
         <SummaryCard title="Total Value" value={summary.totalValue} />
@@ -656,23 +699,50 @@ export default function ContractsPage() {
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="mb-4 flex gap-3">
+        <div className="mb-4 grid grid-cols-1 gap-3 lg:grid-cols-[1fr_220px_220px_100px]">
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Search contract, client, vendor, project, type, status..."
-            className="h-12 flex-1 rounded-xl border border-slate-300 px-4 text-sm outline-none focus:border-emerald-500"
+            className="h-12 rounded-xl border border-slate-300 px-4 text-sm outline-none focus:border-emerald-500"
           />
+
+          <select
+            value={typeFilter}
+            onChange={(event) => setTypeFilter(event.target.value)}
+            className="h-12 rounded-xl border border-slate-300 px-4 text-sm outline-none focus:border-emerald-500"
+          >
+            <option value="">All Types</option>
+            {types.map((type) => (
+              <option key={type.id} value={type.id}>
+                {type.name}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value)}
+            className="h-12 rounded-xl border border-slate-300 px-4 text-sm outline-none focus:border-emerald-500"
+          >
+            <option value="">All Statuses</option>
+            {statuses.map((status) => (
+              <option key={status.id} value={status.id}>
+                {status.name}
+              </option>
+            ))}
+          </select>
+
           <button
-            onClick={() => setSearch("")}
-            className="h-12 rounded-xl border border-slate-300 bg-white px-6 text-sm font-bold hover:bg-slate-50"
+            onClick={resetFilters}
+            className="h-12 rounded-xl border border-slate-300 bg-white px-5 text-sm font-bold hover:bg-slate-50"
           >
             Reset
           </button>
         </div>
 
-        <div className="overflow-hidden rounded-xl border border-slate-200">
-          <table className="w-full border-collapse text-left text-sm">
+        <div className="overflow-x-auto rounded-xl border border-slate-200">
+          <table className="min-w-[1250px] w-full border-collapse text-left text-sm">
             <thead>
               <tr className="bg-slate-950 text-white">
                 <Th>Contract No</Th>
@@ -700,7 +770,10 @@ export default function ContractsPage() {
                 </tr>
               ) : (
                 filteredContracts.map((contract) => (
-                  <tr key={contract.id} className="border-t border-slate-100">
+                  <tr
+                    key={contract.id}
+                    className="border-t border-slate-100 hover:bg-slate-50/70"
+                  >
                     <Td bold>{contract.contract_no || "-"}</Td>
                     <Td>{getClientName(contract)}</Td>
                     <Td>{getVendorName(contract)}</Td>
@@ -717,11 +790,17 @@ export default function ContractsPage() {
                         contract.currency || "PKR",
                       )}
                     </Td>
-                    <Td>{contract.start_date || "-"}</Td>
-                    <Td>{contract.end_date || "-"}</Td>
-                    <Td>{contract.signed_date || "-"}</Td>
+                    <Td>{formatDate(contract.start_date)}</Td>
+                    <Td>{formatDate(contract.end_date)}</Td>
+                    <Td>{formatDate(contract.signed_date)}</Td>
                     <Td>
                       <div className="flex gap-2">
+                        <button
+                          onClick={() => setViewContract(contract)}
+                          className="rounded-lg bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 hover:bg-blue-100"
+                        >
+                          View
+                        </button>
                         <button
                           onClick={() => openEditContract(contract)}
                           className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-900 hover:bg-slate-200"
@@ -742,7 +821,83 @@ export default function ContractsPage() {
             </tbody>
           </table>
         </div>
+
+        <div className="mt-3 text-xs font-semibold text-slate-500">
+          Showing {filteredContracts.length} of {contracts.length} contracts
+        </div>
       </div>
+
+      {viewContract && (
+        <Modal onClose={() => setViewContract(null)}>
+          <div className="mx-auto w-full max-w-3xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="border-b border-slate-100 bg-slate-50 px-6 py-5">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-950">
+                    {viewContract.contract_no || "Contract Details"}
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Complete contract information
+                  </p>
+                </div>
+                <button
+                  onClick={() => setViewContract(null)}
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-lg font-bold text-slate-700 shadow-sm hover:bg-slate-100"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 p-6 md:grid-cols-2">
+              <Detail label="Client" value={getClientName(viewContract)} />
+              <Detail label="Vendor" value={getVendorName(viewContract)} />
+              <Detail label="Project" value={getProjectName(viewContract)} />
+              <Detail label="Type" value={getTypeName(viewContract)} />
+              <Detail label="Status" value={getStatusName(viewContract)} />
+              <Detail
+                label="Value"
+                value={formatMoney(
+                  viewContract.contract_value || 0,
+                  viewContract.currency || "PKR",
+                )}
+              />
+              <Detail label="Start Date" value={formatDate(viewContract.start_date)} />
+              <Detail label="End Date" value={formatDate(viewContract.end_date)} />
+              <Detail
+                label="Signed Date"
+                value={formatDate(viewContract.signed_date)}
+              />
+              <Detail
+                label="Created At"
+                value={formatDateTime(viewContract.created_at)}
+              />
+              <div className="md:col-span-2">
+                <Detail label="Notes" value={viewContract.notes || "-"} />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 border-t border-slate-100 px-6 py-4">
+              <button
+                onClick={() => {
+                  const selected = viewContract;
+                  setViewContract(null);
+                  openEditContract(selected);
+                }}
+                className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-bold text-white hover:bg-slate-800"
+              >
+                Edit Contract
+              </button>
+              <button
+                onClick={() => void deleteContract(viewContract.id)}
+                className="rounded-xl bg-red-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-red-700"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {showForm && (
         <Modal onClose={() => setShowForm(false)}>
@@ -866,6 +1021,7 @@ export default function ContractsPage() {
                 <Field label="Contract Value">
                   <input
                     type="number"
+                    min="0"
                     value={form.contract_value}
                     onChange={(e) =>
                       setForm({ ...form, contract_value: e.target.value })
@@ -943,9 +1099,14 @@ export default function ContractsPage() {
                 </button>
                 <button
                   onClick={() => void saveContract()}
-                  className="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-emerald-700"
+                  disabled={saving}
+                  className="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {editingId ? "Update Contract" : "Add Contract"}
+                  {saving
+                    ? "Saving..."
+                    : editingId
+                      ? "Update Contract"
+                      : "Add Contract"}
                 </button>
               </div>
             </div>
@@ -1023,6 +1184,18 @@ export default function ContractsPage() {
                 ))
               )}
             </div>
+
+            {manageEditId && (
+              <button
+                onClick={() => {
+                  setManageEditId(null);
+                  setManageName("");
+                }}
+                className="mt-4 text-xs font-bold text-slate-500 hover:text-slate-900"
+              >
+                Cancel edit
+              </button>
+            )}
           </div>
         </Modal>
       )}
@@ -1053,7 +1226,7 @@ function SummaryCard({
   );
 }
 
-function Th({ children }: { children: React.ReactNode }) {
+function Th({ children }: { children: ReactNode }) {
   return (
     <th className="whitespace-nowrap px-4 py-3 text-xs font-bold uppercase tracking-wide">
       {children}
@@ -1065,12 +1238,14 @@ function Td({
   children,
   bold = false,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   bold?: boolean;
 }) {
   return (
     <td
-      className={`whitespace-nowrap px-4 py-3 text-slate-700 ${bold ? "font-bold text-slate-950" : ""}`}
+      className={`whitespace-nowrap px-4 py-3 text-slate-700 ${
+        bold ? "font-bold text-slate-950" : ""
+      }`}
     >
       {children}
     </td>
@@ -1082,7 +1257,7 @@ function Field({
   label,
   className = "",
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   label: string;
   className?: string;
 }) {
@@ -1096,11 +1271,24 @@ function Field({
   );
 }
 
+function Detail({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <div className="text-xs font-bold uppercase tracking-wide text-slate-500">
+        {label}
+      </div>
+      <div className="mt-2 whitespace-pre-wrap text-sm font-semibold text-slate-950">
+        {value || "-"}
+      </div>
+    </div>
+  );
+}
+
 function Modal({
   children,
   onClose,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   onClose: () => void;
 }) {
   return (
@@ -1128,8 +1316,25 @@ function formatCurrencySummary(values: Record<string, number>) {
   const entries = Object.entries(values).filter(
     ([, value]) => Number(value) > 0,
   );
+
   if (entries.length === 0) return "0";
+
   return entries
     .map(([currency, value]) => formatMoney(value, currency))
     .join("\n");
+}
+
+function formatDate(value?: string | null) {
+  if (!value) return "-";
+  return value.slice(0, 10);
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return "-";
+
+  try {
+    return new Date(value).toLocaleString();
+  } catch {
+    return value;
+  }
 }
